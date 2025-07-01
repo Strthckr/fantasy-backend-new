@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -183,3 +184,8 @@ cython_debug/
 =======
 .env
 >>>>>>> 3145898 (Intitial commit)
+=======
+.env
+__pycache__/
+*.pyc
+>>>>>>> 32bf62e (Save local changes)
