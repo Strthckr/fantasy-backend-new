@@ -7,6 +7,7 @@ import json
 from decimal import Decimal
 from dotenv import load_dotenv
 import os
+import bcrypt
 
 # Load environment variables from .env file
 load_dotenv()
@@ -32,7 +33,10 @@ db = mysql.connector.connect(
 )
 
 
+
+
 cursor = db.cursor()
+
 
 # Token decorator to protect routes
 def token_required(f):
@@ -72,15 +76,12 @@ def is_admin_user(email):
     return result and result[0] == 1
 
 
-
-
-# Signup API
-import bcrypt
-
-
 @app.route('/')
 def home():
     return "Hello, World!"
+
+# Signup API
+#import bcrypt
 
 @app.route('/signup', methods=['POST'])
 def signup():
@@ -1531,3 +1532,4 @@ if __name__ == '__main__':
         print(rule)
 
     app.run(debug=True)
+
