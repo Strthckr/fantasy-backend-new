@@ -1,0 +1,5 @@
+SECRET_KEY=$2b$12$852fA4jtckgb0QSKmbJOt.dVy6IFLBPMi6oBW/uKHBDFcDh1xJtDO
+DB_HOST=localhost
+DB_USER=root
+DB_PASSWORD=Tasleem@1204
+DB_NAME=fantasy_app

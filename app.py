@@ -24,10 +24,11 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')  # Use 
 
 # MySQL Database Connection using env vars
 db = mysql.connector.connect(
-    host=os.getenv('DB_HOST', 'localhost'),
-    user=os.getenv('DB_USER', 'root'),
-    password=os.getenv('DB_PASSWORD', 'Tasleem@1204'),
-    database=os.getenv('DB_NAME', 'fantasy_app')
+    host=os.getenv('DB_HOST', 'bqlhrtcjcw4vipay79qu-mysql.services.clever-cloud.com'),
+    user=os.getenv('DB_USER', 'ue00kdbfjagh2ka3'),
+    password=os.getenv('DB_PASSWORD', '33ngEPVMeeho9ukLDe3X'),
+    database=os.getenv('DB_NAME', 'bqlhrtcjcw4vipay79qu')
+    # ssl_ca='cacert.pem'
 )
 cursor = db.cursor()
 
