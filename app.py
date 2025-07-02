@@ -81,7 +81,36 @@ def home():
     return "Hello, World!"
 
 # Signup API
-#import bcrypt
+import bcrypt
+print("🔔 /login route is registered")
+
+# Login API
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
+
+    cursor = db.cursor()
+    cursor.execute("SELECT password FROM users WHERE email = %s", (email,))
+    result = cursor.fetchone()
+    
+
+    if result:
+        stored_hashed_password = result[0]
+        if bcrypt.checkpw(password.encode('utf-8'), stored_hashed_password.encode('utf-8')):
+            token = jwt.encode({
+                'email': email,
+                'exp': datetime.utcnow() + timedelta(days=7)
+            }, app.config['SECRET_KEY'], algorithm="HS256")
+
+            return jsonify({"token": token})
+        else:
+            return jsonify({"message": "Invalid credentials"}), 401
+    else:
+        return jsonify({"message": "User not found"}), 404
+
+
 
 @app.route('/signup', methods=['POST'])
 def signup():
@@ -109,33 +138,6 @@ def signup():
         return jsonify({"message": "User registered and wallet created!"}), 201
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 400
-
-
-# Login API
-@app.route('/login', methods=['POST'])
-def login():
-    data = request.get_json()
-    email = data.get('email')
-    password = data.get('password')
-
-    cursor = db.cursor()
-    cursor.execute("SELECT password FROM users WHERE email = %s", (email,))
-    result = cursor.fetchone()
-
-    if result:
-        stored_hashed_password = result[0]
-        if bcrypt.checkpw(password.encode('utf-8'), stored_hashed_password.encode('utf-8')):
-            token = jwt.encode({
-                'email': email,
-                'exp': datetime.utcnow() + timedelta(days=7)
-
-            }, app.config['SECRET_KEY'], algorithm="HS256")
-
-            return jsonify({"token": token})
-        else:
-            return jsonify({"message": "Invalid credentials"}), 401
-    else:
-        return jsonify({"message": "User not found"}), 404
 
 
 
@@ -1517,19 +1519,11 @@ def test_env():
     })
 
 
-from flask import Flask
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Hello, World!"
-
 
 
 if __name__ == '__main__':
-    print("Loaded routes:")
+    print("✅ Registered Routes:")
     for rule in app.url_map.iter_rules():
-        print(rule)
-
+        print(f"{rule.endpoint}: {rule}")
     app.run(debug=True)
 
