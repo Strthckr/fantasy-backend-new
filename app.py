@@ -24,12 +24,14 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')  # Use 
 
 # MySQL Database Connection using env vars
 db = mysql.connector.connect(
-    host=os.getenv('DB_HOST', 'bqlhrtcjcw4vipay79qu-mysql.services.clever-cloud.com'),
-    user=os.getenv('DB_USER', 'ue00kdbfjagh2ka3'),
-    password=os.getenv('DB_PASSWORD', '33ngEPVMeeho9ukLDe3X'),
-    database=os.getenv('DB_NAME', 'bqlhrtcjcw4vipay79qu')
-    # ssl_ca='cacert.pem'
+    host=os.getenv('DB_HOST'),
+    port=int(os.getenv('DB_PORT', 3306)),
+    user=os.getenv('DB_USER'),
+    password=os.getenv('DB_PASSWORD'),
+    database=os.getenv('DB_NAME')
 )
+
+
 cursor = db.cursor()
 
 # Token decorator to protect routes
