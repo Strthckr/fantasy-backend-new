@@ -77,6 +77,11 @@ def is_admin_user(email):
 # Signup API
 import bcrypt
 
+
+@app.route('/')
+def home():
+    return "Hello, World!"
+
 @app.route('/signup', methods=['POST'])
 def signup():
     data = request.get_json()
