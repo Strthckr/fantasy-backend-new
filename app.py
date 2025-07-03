@@ -139,6 +139,19 @@ def signup():
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 400
 
+@app.route('/dashboard', methods=['GET'])
+@token_required
+def dashboard(current_user_email):
+    try:
+        cursor = db.cursor()
+        cursor.execute("SELECT username FROM users WHERE email = %s", (current_user_email,))
+        user = cursor.fetchone()
+        if user:
+            return jsonify({"message": f"Welcome to your dashboard, {user[0]}!"})
+        else:
+            return jsonify({"message": "User not found"}), 404
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
 
 
 
