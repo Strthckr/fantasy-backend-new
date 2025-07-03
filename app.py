@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from flask_cors import CORS
 import jwt
 from functools import wraps
 from flask import Flask, request, jsonify
@@ -21,6 +22,7 @@ print("✅ SECRET_KEY:", os.getenv("SECRET_KEY"))
 
 
 app = Flask(__name__)
+CORS(app, origins=["http://localhost:3000"])
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')  # Use env secret or fallback
 
 # MySQL Database Connection using env vars
