@@ -24,6 +24,8 @@ print("✅ SECRET_KEY:", os.getenv("SECRET_KEY"))
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:3000"])
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')  # Use env secret or fallback
+print("✅ SECRET_KEY loaded:", app.config['SECRET_KEY'])
+
 
 # MySQL Database Connection using env vars
 db = mysql.connector.connect(
@@ -87,6 +89,7 @@ import bcrypt
 print("🔔 /login route is registered")
 
 # Login API
+# ---------- FULL /login ROUTE -------------
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -96,21 +99,31 @@ def login():
     cursor = db.cursor()
     cursor.execute("SELECT password FROM users WHERE email = %s", (email,))
     result = cursor.fetchone()
-    
 
     if result:
         stored_hashed_password = result[0]
+
         if bcrypt.checkpw(password.encode('utf-8'), stored_hashed_password.encode('utf-8')):
-            token = jwt.encode({
-                'email': email,
-                'exp': datetime.utcnow() + timedelta(days=7)
-            }, app.config['SECRET_KEY'], algorithm="HS256")
+            # 🟢 Create JWT token
+            token = jwt.encode(
+                {
+                    'email': email,
+                    'exp': datetime.utcnow() + timedelta(days=7)
+                },
+                app.config['SECRET_KEY'],
+                algorithm="HS256"
+            )
+
+            # 🟢 Ensure token is a str, not bytes
+            if isinstance(token, bytes):
+                token = token.decode('utf-8')
 
             return jsonify({"token": token})
         else:
             return jsonify({"message": "Invalid credentials"}), 401
     else:
         return jsonify({"message": "User not found"}), 404
+# ------------------------------------------
 
 
 
