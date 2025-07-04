@@ -89,7 +89,6 @@ import bcrypt
 print("🔔 /login route is registered")
 
 # Login API
-# ---------- FULL /login ROUTE -------------
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -102,9 +101,7 @@ def login():
 
     if result:
         stored_hashed_password = result[0]
-
         if bcrypt.checkpw(password.encode('utf-8'), stored_hashed_password.encode('utf-8')):
-            # 🟢 Create JWT token
             token = jwt.encode(
                 {
                     'email': email,
@@ -114,7 +111,7 @@ def login():
                 algorithm="HS256"
             )
 
-            # 🟢 Ensure token is a str, not bytes
+            # 🔑 make sure it's a str, not bytes
             if isinstance(token, bytes):
                 token = token.decode('utf-8')
 
@@ -123,7 +120,6 @@ def login():
             return jsonify({"message": "Invalid credentials"}), 401
     else:
         return jsonify({"message": "User not found"}), 404
-# ------------------------------------------
 
 
 
