@@ -1265,15 +1265,29 @@ def auto_lock_contests(current_user_email):
 @app.route('/notifications', methods=['GET'])
 @token_required
 def get_notifications(current_user_email):
-    cursor = db.cursor(dictionary=True)
-    cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-    user = cursor.fetchone()
-    if not user:
-        return jsonify({"message": "User not found"}), 404
+    try:
+        cursor = db.cursor(dictionary=True)
+        
+        # Get user id from email
+        cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+        user = cursor.fetchone()
+        if not user:
+            return jsonify({"message": "User not found"}), 404
 
-    user_id = user['id']
-    cursor.execute("SELECT message, created_at FROM notifications WHERE user_id = %s ORDER BY created_at DESC", (user_id,))
-    return jsonify(cursor.fetchall())
+        user_id = user['id']
+
+        # Fetch notifications for user
+        cursor.execute(
+            "SELECT message, created_at FROM notifications WHERE user_id = %s ORDER BY created_at DESC", 
+            (user_id,)
+        )
+        notifications = cursor.fetchall()
+
+        # Return notifications wrapped in an object, not raw list (better API design)
+        return jsonify({"notifications": notifications})
+
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
 
 
 
