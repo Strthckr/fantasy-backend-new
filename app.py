@@ -1266,9 +1266,13 @@ def get_notifications(current_user_email):
 @token_required
 def wallet_topup(current_user_email):
     data = request.get_json()
-    amount = data.get('amount')
+    
+    try:
+        amount = Decimal(str(data.get('amount', 0)))  # Safely cast to Decimal
+    except Exception:
+        return jsonify({"message": "Invalid amount"}), 400
 
-    if not amount or amount <= 0:
+    if amount <= 0:
         return jsonify({"message": "Invalid amount"}), 400
 
     cursor = db.cursor()
@@ -1278,7 +1282,7 @@ def wallet_topup(current_user_email):
         return jsonify({"message": "User not found"}), 404
     user_id = user[0]
 
-    # Update wallet
+    # Update wallet balance
     cursor.execute("UPDATE wallets SET balance = balance + %s WHERE user_id = %s", (amount, user_id))
 
     # Log transaction
@@ -1295,8 +1299,6 @@ def wallet_topup(current_user_email):
 
     db.commit()
     return jsonify({"message": f"Wallet topped up with ₹{amount} successfully."})
-
-
 
 
 @app.route('/admin/statistics', methods=['GET'])
