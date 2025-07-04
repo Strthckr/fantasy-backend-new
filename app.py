@@ -677,14 +677,30 @@ def wallet(current_user_email):
 
 
 
-@app.route('/transactions/<int:user_id>', methods=['GET'])
+@app.route('/transactions', methods=['GET'])
 @token_required
-def get_transactions(current_user_email, user_id):
+def get_transactions(current_user_email):
     try:
         cursor = db.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM transactions WHERE user_id = %s ORDER BY id DESC", (user_id,))
+
+        # ✅ Get user ID from current_user_email
+        cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+        user = cursor.fetchone()
+        if not user:
+            return jsonify({"message": "User not found"}), 404
+
+        user_id = user['id']
+
+        # ✅ Fetch transactions
+        cursor.execute("""
+            SELECT amount, type, description, created_at
+            FROM transactions
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+        """, (user_id,))
         transactions = cursor.fetchall()
-        return jsonify(transactions)
+
+        return jsonify({"transactions": transactions})
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
