@@ -179,6 +179,8 @@ def create_team(current_user_email):
         return jsonify({"message": "Missing team_name, players, or contest_id"}), 400
 
     try:
+        cursor = db.cursor()  # ✅ Add this missing line
+
         # Get user ID
         cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
         user = cursor.fetchone()
