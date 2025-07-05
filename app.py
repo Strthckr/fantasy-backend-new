@@ -638,17 +638,20 @@ def declare_winner(current_user_email):
 
 
 
-@app.route('/profile', methods=['GET'])
+@app.route('/profile', methods=['PUT'])
 @token_required
-def profile(current_user_email):
+def update_profile(current_user_email):
+    data = request.get_json()
+    new_username = data.get('username')
+
+    if not new_username:
+        return jsonify({"message": "Username is required"}), 400
+
     try:
-        cursor = db.cursor(dictionary=True)
-        cursor.execute("SELECT id, username, email FROM users WHERE email = %s", (current_user_email,))
-        user = cursor.fetchone()
-        if user:
-            return jsonify(user)
-        else:
-            return jsonify({"message": "User not found"}), 404
+        cursor = db.cursor()
+        cursor.execute("UPDATE users SET username = %s WHERE email = %s", (new_username, current_user_email))
+        db.commit()
+        return jsonify({"message": "Profile updated successfully"})
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
