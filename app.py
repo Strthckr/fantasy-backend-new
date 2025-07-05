@@ -166,145 +166,104 @@ def dashboard(current_user_email):
 
 
 
-# Create Team API
+# ----------  CREATE TEAM  ----------
 @app.route('/create_team', methods=['POST'])
 @token_required
 def create_team(current_user_email):
+    """
+    Body: {
+      "contest_id": 8,
+      "team_name": "Mighty XI",
+      "players": ["Kohli","Rohit", ... 11 total ...]
+    }
+    """
     data = request.get_json()
-    team_name = data.get('team_name')
-    players = data.get('players')
-    contest_id = data.get('contest_id')  # Required
+    team_name  = data.get('team_name')
+    players    = data.get('players')
+    contest_id = data.get('contest_id')
 
-    if not team_name or not players or not contest_id:
-        return jsonify({"message": "Missing team_name, players, or contest_id"}), 400
+    if not team_name or not players or len(players) != 11 or not contest_id:
+        return jsonify({"message": "team_name, 11 players & contest_id required"}), 400
 
-    try:
-        cursor = db.cursor()  # ✅ Add this missing line
+    cur = cursor
+    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+    row = cur.fetchone()
+    if not row:
+        return jsonify({"message": "User not found"}), 404
+    user_id = row[0]
 
-        # Get user ID
-        cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-        user = cursor.fetchone()
-        if not user:
-            return jsonify({"message": "User not found"}), 404
-        user_id = user[0]
+    # max teams check
+    cur.execute("SELECT max_teams_per_user FROM contests WHERE id=%s", (contest_id,))
+    max_teams = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM teams WHERE user_id=%s AND contest_id=%s", (user_id, contest_id))
+    if max_teams and cur.fetchone()[0] >= max_teams:
+        return jsonify({"message": f"Only {max_teams} teams allowed in this contest"}), 403
 
-        # ✅ Get max teams allowed for this contest
-        cursor.execute("SELECT max_teams_per_user FROM contests WHERE id = %s", (contest_id,))
-        contest = cursor.fetchone()
-        if not contest:
-            return jsonify({"message": "Contest not found"}), 404
-        max_teams = contest[0]
+    # duplicate team check
+    players_sorted = sorted(players)
+    cur.execute("SELECT players FROM teams WHERE user_id=%s AND contest_id=%s", (user_id, contest_id))
+    for (js,) in cur.fetchall():
+        if sorted(json.loads(js)) == players_sorted:
+            return jsonify({"message": "Same player combination already used"}), 400
 
-        # ✅ Count user's teams already created for this contest
-        cursor.execute("""
-            SELECT COUNT(*) FROM teams 
-            WHERE user_id = %s AND contest_id = %s
-        """, (user_id, contest_id))
-        team_count = cursor.fetchone()[0]
-
-        if max_teams is not None and max_teams > 0 and team_count >= max_teams:
-            return jsonify({"message": f"Limit reached: You can create only {max_teams} teams for this contest."}), 403
-
-        # ✅ Prevent duplicate players in the same team
-        if len(players) != len(set(players)):
-            return jsonify({"message": "Duplicate players found in the team"}), 400
-
-        # ✅ Check if team with same players already exists for the user in this contest
-        players_sorted = sorted(players)
-        cursor.execute("""
-            SELECT players FROM teams 
-            WHERE user_id = %s AND contest_id = %s
-        """, (user_id, contest_id))
-        existing_teams = cursor.fetchall()
-
-        for (existing_players_json,) in existing_teams:
-            existing_players = json.loads(existing_players_json)
-            if sorted(existing_players) == players_sorted:
-                return jsonify({"message": "A team with the same players already exists."}), 400
-
-        # ✅ All good, insert new team
-        players_json = json.dumps(players)
-        cursor.execute("""
-            INSERT INTO teams (team_name, players, user_id, contest_id)
-            VALUES (%s, %s, %s, %s)
-        """, (team_name, players_json, user_id, contest_id))
-
-        db.commit()
-        return jsonify({"message": "Team created successfully!"})
-
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
+    cur.execute("""
+        INSERT INTO teams (team_name, players, user_id, contest_id)
+        VALUES (%s, %s, %s, %s)
+    """, (team_name, json.dumps(players), user_id, contest_id))
+    db.commit()
+    return jsonify({"message": "Team created ✔"})
 
 # Join Contest API
 now = datetime.utcnow()
 
 
-# 4️⃣  Join contest ------------------------
+
+# ----------  JOIN CONTEST  ----------
 @app.route('/join_contest', methods=['POST'])
 @token_required
 def join_contest(current_user_email):
+    """
+    Body: { "contest_id": 8 }
+    Deduct entry fee, add a row in entries, bump joined_users.
+    """
     data = request.get_json()
     contest_id = data.get('contest_id')
-    team_id    = data.get('team_id')
+    if not contest_id:
+        return jsonify({"message": "Contest ID required"}), 400
 
-    if not contest_id or not team_id:
-        return jsonify({"message": "contest_id and team_id are required"}), 400
-
-    cursor = db.cursor()
-
-    # -- get user id
-    cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-    row = cursor.fetchone()
+    cur = cursor
+    # user_id
+    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+    row = cur.fetchone()
     if not row:
         return jsonify({"message": "User not found"}), 404
     user_id = row[0]
 
-    # -- ensure not already joined with same team
-    cursor.execute("""
-        SELECT id FROM entries
-        WHERE user_id = %s AND contest_id = %s AND team_id = %s
-    """, (user_id, contest_id, team_id))
-    if cursor.fetchone():
-        return jsonify({"message": "Already joined with this team"}), 400
-
-    # -- contest info
-    cursor.execute("""
-        SELECT entry_fee, joined_users, max_users
-        FROM contests
-        WHERE id = %s
-    """, (contest_id,))
-    row = cursor.fetchone()
+    # contest details
+    cur.execute("SELECT entry_fee, joined_users, max_users FROM contests WHERE id=%s", (contest_id,))
+    row = cur.fetchone()
     if not row:
         return jsonify({"message": "Contest not found"}), 404
-    entry_fee, joined_users, max_users = row
+    entry_fee, joined, max_users = row
+    if joined >= max_users:
+        return jsonify({"message": "Contest full"}), 400
 
-    if joined_users >= max_users:
-        return jsonify({"message": "Contest is full"}), 400
+    # wallet balance
+    cur.execute("SELECT balance FROM wallets WHERE user_id=%s", (user_id,))
+    bal = cur.fetchone()[0]
+    if bal < entry_fee:
+        return jsonify({"message": "Insufficient balance"}), 403
 
-    # -- wallet balance
-    cursor.execute("""
-        SELECT w.balance
-        FROM wallets w
-        JOIN users  u ON w.user_id = u.id
-        WHERE u.id = %s
-    """, (user_id,))
-    wallet = cursor.fetchone()
-    if not wallet or wallet[0] < entry_fee:
-        return jsonify({"message": "Insufficient wallet balance"}), 403
-
-    # ========  transactional actions =========
-    cursor.execute("UPDATE wallets SET balance = balance - %s WHERE user_id = %s", (entry_fee, user_id))
-    cursor.execute("UPDATE contests SET joined_users = joined_users + 1 WHERE id = %s", (contest_id,))
-    cursor.execute("INSERT INTO entries (user_id, contest_id, team_id) VALUES (%s, %s, %s)",
-                   (user_id, contest_id, team_id))
-    cursor.execute("""
+    # deduct and join
+    cur.execute("UPDATE wallets SET balance = balance - %s WHERE user_id=%s", (entry_fee, user_id))
+    cur.execute("UPDATE contests SET joined_users = joined_users + 1 WHERE id=%s", (contest_id,))
+    cur.execute("INSERT INTO entries (user_id, contest_id) VALUES (%s, %s)", (user_id, contest_id))
+    cur.execute("""
         INSERT INTO transactions (user_id, amount, type, description)
         VALUES (%s, %s, 'debit', 'Joined contest')
     """, (user_id, entry_fee))
-
     db.commit()
-    return jsonify({"message": f"Joined contest! ₹{entry_fee} deducted from wallet."})
+    return jsonify({"message": f"Joined! ₹{entry_fee} deducted."})
 
 
 # Create Contest API
@@ -1132,10 +1091,13 @@ def get_my_contests(current_user_email):
         return jsonify({"error": str(err)}), 500
 
 
-# 2️⃣  List contests *for one match* -------
-@app.route('/contests/match/<int:match_id>', methods=['GET'])
-def list_match_contests(match_id):
-    """Contests page in Phase 4 (UI hits this endpoint)."""
+# ----------  MATCH → CONTEST LIST  ----------
+@app.route('/contests/<int:match_id>', methods=['GET'])
+def get_contests(match_id):
+    """
+    Return ALL contests that belong to the given match_id
+    Ordered by prize_pool DESC so biggest prizes first.
+    """
     try:
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
@@ -1145,7 +1107,8 @@ def list_match_contests(match_id):
                    prize_pool,
                    max_users,
                    joined_users,
-                   status
+                   start_time,
+                   end_time
             FROM contests
             WHERE match_id = %s
             ORDER BY prize_pool DESC
