@@ -1253,15 +1253,17 @@ def call_update_status(current_user_email):
 
 @app.route('/matches', methods=['GET'])
 def get_matches():
+    """Return all matches with status normalised to UPPER-CASE."""
     try:
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
-            SELECT id,
-                   match_name      AS name,      -- alias for frontend
-                   start_time,
-                   status
+            SELECT
+                id,
+                match_name       AS name,        -- easier for React
+                start_time,
+                UPPER(status)    AS status       -- always UPCOMING/LIVE/COMPLETED
             FROM matches
-            ORDER BY start_time ASC
+            ORDER BY start_time
         """)
         matches = cursor.fetchall()
         return jsonify(matches)
