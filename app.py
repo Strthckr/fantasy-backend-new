@@ -1253,15 +1253,20 @@ def call_update_status(current_user_email):
 
 @app.route('/matches', methods=['GET'])
 def get_matches():
-    cursor = db.cursor(dictionary=True)
-    cursor.execute("""
-        SELECT id, match_name, start_time, end_time, status 
-        FROM matches 
-        WHERE status IN ('live', 'upcoming') 
-        ORDER BY start_time
-    """)
-    matches = cursor.fetchall()
-    return jsonify(matches)
+    try:
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT id,
+                   match_name      AS name,      -- alias for frontend
+                   start_time,
+                   status
+            FROM matches
+            ORDER BY start_time ASC
+        """)
+        matches = cursor.fetchall()
+        return jsonify(matches)
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
 
 
 
