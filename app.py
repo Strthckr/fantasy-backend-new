@@ -638,7 +638,7 @@ def declare_winner(current_user_email):
 
 
 
-@app.route('/profile', methods=['PUT'])
+@app.route('/profile', methods=['GET'])
 @token_required
 def update_profile(current_user_email):
     data = request.get_json()
