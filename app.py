@@ -332,19 +332,52 @@ def list_all_contests():
     
 
 # User’s contests
+# ── app.py ──────────────────────────────────────────────────────────────────────
+# Imports, db connection, @token_required … already exist above this snippet
+# ------------------------------------------------------------------------------
+
 @app.route('/my_contests/<int:user_id>', methods=['GET'])
-def my_contests(user_id):
+@token_required        # <- keep this if you already protect with JWT
+def my_contests(current_user_email, user_id):
+    """
+    Return every contest the user has joined, with:
+      • contest + match + team names
+      • match status (UPCOMING / LIVE / COMPLETED)
+      • rank & prize (NULL if result not declared yet)
+    """
     try:
         cursor = db.cursor(dictionary=True)
+
         query = """
-            SELECT c.id, c.contest_name, c.entry_fee
-            FROM contests c
-            JOIN entries e ON c.id = e.contest_id
-            WHERE e.user_id = %s
+        SELECT  c.id                 AS contest_id,
+                c.contest_name,
+                c.entry_fee,
+                m.id                 AS match_id,
+                m.match_name,
+                m.start_time,
+                t.name               AS team_name,
+                e.id                 AS entry_id,
+                e.rank,
+                e.prize,
+                CASE
+                    WHEN NOW() <  m.start_time           THEN 'UPCOMING'
+                    WHEN NOW() BETWEEN m.start_time
+                                  AND m.end_time         THEN 'LIVE'
+                    ELSE                                     'COMPLETED'
+                END                  AS match_status
+        FROM    entries   e
+        JOIN    contests  c ON c.id = e.contest_id
+        JOIN    matches   m ON m.id = c.match_id
+        JOIN    teams     t ON t.id = e.team_id
+        WHERE   e.user_id = %s
+        ORDER BY m.start_time DESC;
         """
+
         cursor.execute(query, (user_id,))
-        contests = cursor.fetchall()
-        return jsonify(contests)
+        contests = cursor.fetchall()          # returns list of dicts
+
+        return jsonify({"my_contests": contests}), 200
+
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
