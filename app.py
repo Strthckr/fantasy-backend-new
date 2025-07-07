@@ -335,24 +335,61 @@ def list_all_contests():
 # User’s contests
 @app.route('/my_contests/<int:user_id>', methods=['GET'])
 def my_contests(user_id):
+    """
+    Return every contest the given user has joined, with prize-pool, time,
+    and computed status (UPCOMING/LIVE/COMPLETED).
+
+    Output → { "contests": [ {...}, … ] }
+    """
+    try:
+        cursor = db.cursor(dictionary=True)
+
+        query = """
+            SELECT  c.id,
+                    c.contest_name,
+                    c.entry_fee,
+                    c.prize_pool,
+                    c.joined_users,
+                    c.max_users,
+                    m.start_time,
+                    m.end_time,
+                    CASE
+                        WHEN NOW() <  m.start_time           THEN 'UPCOMING'
+                        WHEN NOW() BETWEEN m.start_time
+                                       AND m.end_time         THEN 'LIVE'
+                        ELSE                                     'COMPLETED'
+                    END AS status
+            FROM    contests  c
+            JOIN    entries   e ON c.id = e.contest_id
+            JOIN    matches   m ON m.id = c.match_id
+            WHERE   e.user_id = %s
+            ORDER BY m.start_time DESC;
+        """
+
+        cursor.execute(query, (user_id,))
+        contests = cursor.fetchall()         # list[dict]
+        return jsonify({"contests": contests}), 200
+
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
+# Leaderboard API
+@app.route('/leaderboard/<int:contest_id>', methods=['GET'])
+def leaderboard(contest_id):
     try:
         cursor = db.cursor(dictionary=True)
         query = """
-            SELECT 
-                c.id, 
-                c.contest_name, 
-                c.entry_fee, 
-                c.prize_pool, 
-                c.start_time, 
-                c.end_time, 
-                c.status
-            FROM contests c
-            JOIN entries e ON c.id = e.contest_id
-            WHERE e.user_id = %s
+            SELECT t.team_name, SUM(s.points) AS total_points
+            FROM teams t
+            JOIN entries e ON t.id = e.team_id
+            JOIN scores s ON e.id = s.entry_id
+            WHERE e.contest_id = %s
+            GROUP BY t.team_name
+            ORDER BY total_points DESC
+            LIMIT 10
         """
-        cursor.execute(query, (user_id,))
-        contests = cursor.fetchall()
-        return jsonify({"contests": contests})
+        cursor.execute(query, (contest_id,))
+        results = cursor.fetchall()
+        return jsonify(results)
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
@@ -1048,35 +1085,29 @@ def get_my_teams(current_user_email):
 
 
 
-@app.route('/my_contests', methods=['GET'])
-@token_required
-def get_my_contests(current_user_email):
+@app.route('/my_contests/<int:user_id>', methods=['GET'])
+def my_contests(user_id):
     try:
         cursor = db.cursor(dictionary=True)
-
-        # Get user id
-        cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-        user = cursor.fetchone()
-        if not user:
-            return jsonify({"message": "User not found"}), 404
-        
-        user_id = user['id']
-
-        # Get contest ids where user has teams
-        cursor.execute("""
-            SELECT DISTINCT c.id, c.contest_name, c.entry_fee, c.prize_pool, c.status, c.start_time, c.end_time
+        query = """
+            SELECT 
+                c.id,
+                COALESCE(c.contest_name, c.name) AS contest_name,
+                c.entry_fee,
+                c.prize_pool,
+                c.start_time,
+                c.end_time,
+                c.status
             FROM contests c
-            JOIN teams t ON c.id = t.contest_id
-            WHERE t.user_id = %s
-        """, (user_id,))
-
+            JOIN entries e ON c.id = e.contest_id
+            WHERE e.user_id = %s
+            GROUP BY c.id
+        """
+        cursor.execute(query, (user_id,))
         contests = cursor.fetchall()
-
         return jsonify({"contests": contests})
-
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
-
 
 # ----------  MATCH → CONTEST LIST  ----------
 @app.route('/contests/<int:match_id>', methods=['GET'])
