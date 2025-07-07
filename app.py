@@ -1085,29 +1085,35 @@ def get_my_teams(current_user_email):
 
 
 
-@app.route('/my_contests/<int:user_id>', methods=['GET'])
-def my_contests(user_id):
+@app.route('/my_contests', methods=['GET'])
+@token_required
+def get_my_contests(current_user_email):
     try:
         cursor = db.cursor(dictionary=True)
-        query = """
-            SELECT 
-                c.id,
-                COALESCE(c.contest_name, c.name) AS contest_name,
-                c.entry_fee,
-                c.prize_pool,
-                c.start_time,
-                c.end_time,
-                c.status
+
+        # Get user id
+        cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+        user = cursor.fetchone()
+        if not user:
+            return jsonify({"message": "User not found"}), 404
+        
+        user_id = user['id']
+
+        # Get contest ids where user has teams
+        cursor.execute("""
+            SELECT DISTINCT c.id, c.contest_name, c.entry_fee, c.prize_pool, c.status, c.start_time, c.end_time
             FROM contests c
-            JOIN entries e ON c.id = e.contest_id
-            WHERE e.user_id = %s
-            GROUP BY c.id
-        """
-        cursor.execute(query, (user_id,))
+            JOIN teams t ON c.id = t.contest_id
+            WHERE t.user_id = %s
+        """, (user_id,))
+
         contests = cursor.fetchall()
+
         return jsonify({"contests": contests})
+
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
+
 
 # ----------  MATCH → CONTEST LIST  ----------
 @app.route('/contests/<int:match_id>', methods=['GET'])
