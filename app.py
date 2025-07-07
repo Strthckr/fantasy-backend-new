@@ -334,20 +334,43 @@ def list_all_contests():
 # User’s contests
 @app.route('/my_contests/<int:user_id>', methods=['GET'])
 def my_contests(user_id):
+    """
+    Return every contest the given user has joined, with prize-pool, time,
+    and computed status (UPCOMING/LIVE/COMPLETED).
+
+    Output → { "contests": [ {...}, … ] }
+    """
     try:
         cursor = db.cursor(dictionary=True)
+
         query = """
-            SELECT c.id, c.contest_name, c.entry_fee
-            FROM contests c
-            JOIN entries e ON c.id = e.contest_id
-            WHERE e.user_id = %s
+            SELECT  c.id,
+                    c.contest_name,
+                    c.entry_fee,
+                    c.prize_pool,
+                    c.joined_users,
+                    c.max_users,
+                    m.start_time,
+                    m.end_time,
+                    CASE
+                        WHEN NOW() <  m.start_time           THEN 'UPCOMING'
+                        WHEN NOW() BETWEEN m.start_time
+                                       AND m.end_time         THEN 'LIVE'
+                        ELSE                                     'COMPLETED'
+                    END AS status
+            FROM    contests  c
+            JOIN    entries   e ON c.id = e.contest_id
+            JOIN    matches   m ON m.id = c.match_id
+            WHERE   e.user_id = %s
+            ORDER BY m.start_time DESC;
         """
+
         cursor.execute(query, (user_id,))
-        contests = cursor.fetchall()
-        return jsonify(contests)
+        contests = cursor.fetchall()         # list[dict]
+        return jsonify({"contests": contests}), 200
+
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
-
 # Leaderboard API
 @app.route('/leaderboard/<int:contest_id>', methods=['GET'])
 def leaderboard(contest_id):
