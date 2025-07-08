@@ -1698,44 +1698,59 @@ def admin_dashboard(current_user_email):
         return jsonify({"error": str(e)}), 500
 
 
-
-@app.route('/admin/matches', methods=['GET'])
+@app.route('/admin/get_matches', methods=['GET'])
 @token_required
-def get_matches(current_user_email):
+def admin_get_matches(current_user_email):
     if not is_admin_user(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
-    cursor = db.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM matches ORDER BY start_time DESC")
-    matches = cursor.fetchall()
-    return jsonify(matches), 200
+    try:
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM matches ORDER BY start_time DESC")
+        return jsonify(cursor.fetchall()), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/admin/matches', methods=['POST'])
+
+@app.route('/admin/create_match', methods=['POST'])
 @token_required
-def create_match(current_user_email):
+def admin_create_match(current_user_email):
     if not is_admin_user(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     data = request.get_json()
-    required_fields = ['match_name', 'start_time', 'end_time']
-    if not all(data.get(k) for k in required_fields):
+    if not all(data.get(k) for k in ['match_name', 'start_time', 'end_time']):
         return jsonify({"message": "Missing required fields"}), 400
 
-    cursor = db.cursor()
-    cursor.execute("""
-        INSERT INTO matches (match_name, start_time, end_time, status)
-        VALUES (%s, %s, %s, %s)
-    """, (data['match_name'], data['start_time'], data['end_time'], data.get('status', 'UPCOMING')))
-    db.commit()
-    return jsonify({"message": "Match created successfully"}), 201
+    try:
+        cursor = db.cursor()
+        cursor.execute("""
+            INSERT INTO matches (match_name, start_time, end_time, status)
+            VALUES (%s, %s, %s, %s)
+        """, (
+            data['match_name'],
+            data['start_time'],
+            data['end_time'],
+            data.get('status', 'UPCOMING')
+        ))
+        db.commit()
+        return jsonify({"message": "Match created successfully"}), 201
+    except Exception as e:
+        db.rollback()
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/admin/matches/<int:match_id>', methods=['PUT'])
+
+@app.route('/admin/update_match', methods=['POST'])
 @token_required
-def update_match(current_user_email, match_id):
+def admin_update_match(current_user_email):
     if not is_admin_user(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     data = request.get_json()
+    match_id = data.get("id")
+    if not match_id:
+        return jsonify({"message": "Match ID is required"}), 400
+
     fields = []
     values = []
     for key in ['match_name', 'start_time', 'end_time', 'status']:
@@ -1747,21 +1762,37 @@ def update_match(current_user_email, match_id):
         return jsonify({"message": "Nothing to update"}), 400
 
     values.append(match_id)
-    cursor = db.cursor()
-    cursor.execute(f"UPDATE matches SET {', '.join(fields)} WHERE id = %s", tuple(values))
-    db.commit()
-    return jsonify({"message": "Match updated successfully"}), 200
 
-@app.route('/admin/matches/<int:match_id>', methods=['DELETE'])
+    try:
+        cursor = db.cursor()
+        cursor.execute(f"UPDATE matches SET {', '.join(fields)} WHERE id = %s", tuple(values))
+        db.commit()
+        return jsonify({"message": "Match updated successfully"}), 200
+    except Exception as e:
+        db.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/admin/delete_match', methods=['POST'])
 @token_required
-def delete_match(current_user_email, match_id):
+def admin_delete_match(current_user_email):
     if not is_admin_user(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
-    cursor = db.cursor()
-    cursor.execute("DELETE FROM matches WHERE id = %s", (match_id,))
-    db.commit()
-    return jsonify({"message": f"Match ID {match_id} deleted"}), 200
+    data = request.get_json()
+    match_id = data.get("id")
+    if not match_id:
+        return jsonify({"message": "Match ID is required"}), 400
+
+    try:
+        cursor = db.cursor()
+        cursor.execute("DELETE FROM matches WHERE id = %s", (match_id,))
+        db.commit()
+        return jsonify({"message": f"Match ID {match_id} deleted"}), 200
+    except Exception as e:
+        db.rollback()
+        return jsonify({"error": str(e)}), 500
+
 
 
 
