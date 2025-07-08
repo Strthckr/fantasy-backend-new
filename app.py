@@ -1655,7 +1655,7 @@ def get_contest_result(current_user_email, contest_id):
 
 
 
-@app.route('/admin/summary', methods=['GET'])
+@app.route('/admin/dashboard', methods=['GET'])
 @token_required
 def admin_summary(current_user_email):
     if not is_admin_user(current_user_email):
