@@ -1407,11 +1407,19 @@ def admin_statistics(current_user_email):
         cursor.execute("SELECT COUNT(*) as total_users FROM users")
         total_users = cursor.fetchone()['total_users']
 
-        # 2. Total contests
+        # 2. Total matches
+        cursor.execute("SELECT COUNT(*) as total_matches FROM matches")
+        total_matches = cursor.fetchone()['total_matches']
+
+        # 3. Total contests
         cursor.execute("SELECT COUNT(*) as total_contests FROM contests")
         total_contests = cursor.fetchone()['total_contests']
 
-        # 3. Total prize distributed (from transaction history as 'credit' + prize)
+        # 4. Active contests
+        cursor.execute("SELECT COUNT(*) as active_contests FROM contests WHERE status = 'active'")
+        active_contests = cursor.fetchone()['active_contests']
+
+        # 5. Total prize distributed
         cursor.execute("""
             SELECT SUM(amount) as total_prize_distributed 
             FROM transaction_history 
@@ -1420,22 +1428,20 @@ def admin_statistics(current_user_email):
         prize_result = cursor.fetchone()
         total_prize_distributed = float(prize_result['total_prize_distributed'] or 0)
 
-        # 4. Total withdrawal requests
+        # 6. Total withdrawal requests
         cursor.execute("SELECT COUNT(*) as total_withdraw_requests FROM withdrawal_requests")
         total_withdraw_requests = cursor.fetchone()['total_withdraw_requests']
 
-        # 5. Total commission earned (if you track commissions in transaction_history)
-        cursor.execute("""
-            SELECT SUM(amount) as total_commission 
-            FROM transaction_history 
-            WHERE transaction_type = 'commission'
-        """)
+        # 7. Total commission earned (from platform_earnings table)
+        cursor.execute("SELECT SUM(commission_amount) as total_commission FROM platform_earnings")
         commission_result = cursor.fetchone()
         total_commission_earned = float(commission_result['total_commission'] or 0)
 
         return jsonify({
             "total_users": total_users,
+            "total_matches": total_matches,
             "total_contests": total_contests,
+            "active_contests": active_contests,
             "total_prize_distributed": total_prize_distributed,
             "total_withdraw_requests": total_withdraw_requests,
             "total_commission_earned": total_commission_earned
