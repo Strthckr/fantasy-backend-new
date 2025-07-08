@@ -1699,7 +1699,6 @@ def admin_dashboard(current_user_email):
 
 
 
-
 @app.route('/admin/matches', methods=['GET'])
 @token_required
 def get_matches(current_user_email):
@@ -1763,6 +1762,8 @@ def delete_match(current_user_email, match_id):
     cursor.execute("DELETE FROM matches WHERE id = %s", (match_id,))
     db.commit()
     return jsonify({"message": f"Match ID {match_id} deleted"}), 200
+
+
 
 
 
