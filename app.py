@@ -1404,24 +1404,24 @@ def admin_statistics(current_user_email):
         cursor = db.cursor(dictionary=True)
 
         # 1. Total users
-        cursor.execute("SELECT COUNT(*) as total_users FROM users")
+        cursor.execute("SELECT COUNT(*) AS total_users FROM users")
         total_users = cursor.fetchone()['total_users']
 
         # 2. Total matches
-        cursor.execute("SELECT COUNT(*) as total_matches FROM matches")
+        cursor.execute("SELECT COUNT(*) AS total_matches FROM matches")
         total_matches = cursor.fetchone()['total_matches']
 
         # 3. Total contests
-        cursor.execute("SELECT COUNT(*) as total_contests FROM contests")
+        cursor.execute("SELECT COUNT(*) AS total_contests FROM contests")
         total_contests = cursor.fetchone()['total_contests']
 
         # 4. Active contests
-        cursor.execute("SELECT COUNT(*) as active_contests FROM contests WHERE status = 'active'")
+        cursor.execute("SELECT COUNT(*) AS active_contests FROM contests WHERE status = 'active'")
         active_contests = cursor.fetchone()['active_contests']
 
-        # 5. Total prize distributed
+        # 5. Total prize distributed (based on credited prizes)
         cursor.execute("""
-            SELECT SUM(amount) as total_prize_distributed 
+            SELECT SUM(amount) AS total_prize_distributed 
             FROM transaction_history 
             WHERE transaction_type = 'credit' AND description LIKE 'Prize%'
         """)
@@ -1429,11 +1429,20 @@ def admin_statistics(current_user_email):
         total_prize_distributed = float(prize_result['total_prize_distributed'] or 0)
 
         # 6. Total withdrawal requests
-        cursor.execute("SELECT COUNT(*) as total_withdraw_requests FROM withdrawal_requests")
+        cursor.execute("SELECT COUNT(*) AS total_withdraw_requests FROM withdrawal_requests")
         total_withdraw_requests = cursor.fetchone()['total_withdraw_requests']
 
-        # 7. Total commission earned (from platform_earnings table)
-        cursor.execute("SELECT SUM(commission_amount) as total_commission FROM platform_earnings")
+        # 7. Total commission earned (calculated dynamically per contest)
+        cursor.execute("""
+            SELECT 
+                ROUND(SUM(c.entry_fee * c.commission_percentage / 100 * entry_count), 2) AS total_commission
+            FROM (
+                SELECT c.id, c.entry_fee, c.commission_percentage, COUNT(e.id) AS entry_count
+                FROM contests c
+                JOIN entries e ON c.id = e.contest_id
+                GROUP BY c.id, c.entry_fee, c.commission_percentage
+            ) AS contest_data
+        """)
         commission_result = cursor.fetchone()
         total_commission_earned = float(commission_result['total_commission'] or 0)
 
