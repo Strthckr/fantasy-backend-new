@@ -1700,6 +1700,29 @@ def admin_dashboard(current_user_email):
 
 
 
+@app.route('/admin/matches', methods=['GET'])
+@token_required
+def get_all_matches(current_user_email):
+    if not is_admin_user(current_user_email):
+        return jsonify({"message": "Unauthorized"}), 403
+
+    try:
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT 
+                id, match_name, start_time, end_time, status
+            FROM matches
+            ORDER BY start_time DESC
+        """)
+        matches = cursor.fetchall()
+        return jsonify(matches), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+
 
 @app.route('/test_env')
 def test_env():
