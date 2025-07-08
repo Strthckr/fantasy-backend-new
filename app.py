@@ -1655,6 +1655,52 @@ def get_contest_result(current_user_email, contest_id):
 
 
 
+@app.route('/admin/summary', methods=['GET'])
+@token_required
+def admin_summary(current_user_email):
+    if not is_admin_user(current_user_email):
+        return jsonify({"message": "Unauthorized"}), 403
+
+    try:
+        cursor = db.cursor(dictionary=True)
+
+        # Users, Matches, Contests
+        cursor.execute("SELECT COUNT(*) AS count FROM users")
+        total_users = cursor.fetchone()['count']
+
+        cursor.execute("SELECT COUNT(*) AS count FROM matches")
+        total_matches = cursor.fetchone()['count']
+
+        cursor.execute("SELECT COUNT(*) AS count FROM contests")
+        total_contests = cursor.fetchone()['count']
+
+        cursor.execute("SELECT COUNT(*) AS count FROM contests WHERE status = 'active'")
+        active_contests = cursor.fetchone()['count']
+
+        # Total prize distributed (sum of all winning amounts)
+        cursor.execute("SELECT SUM(prize) AS total FROM entries WHERE prize IS NOT NULL")
+        prize_total = cursor.fetchone()['total'] or 0
+
+        # Platform earnings from commissions
+        cursor.execute("SELECT SUM(commission_amount) AS total FROM platform_earnings")
+        commission_total = cursor.fetchone()['total'] or 0
+
+        return jsonify({
+            "total_users": total_users,
+            "total_matches": total_matches,
+            "total_contests": total_contests,
+            "active_contests": active_contests,
+            "total_prize_distributed": float(prize_total),
+            "total_commission_earned": float(commission_total)
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+
 @app.route('/test_env')
 def test_env():
     return jsonify({
