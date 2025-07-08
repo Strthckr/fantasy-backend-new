@@ -1627,6 +1627,33 @@ def my_contest_history(current_user_email):
         return jsonify({"error": str(err)}), 500
 
 
+@app.route('/contest_result/<int:contest_id>', methods=['GET'])
+@token_required
+def get_contest_result(current_user_email, contest_id):
+    try:
+        cursor = db.cursor(dictionary=True)
+
+        # Get contest entries with user, team, and points
+        query = """
+            SELECT u.name as user_name, t.team_name, t.total_points
+            FROM entries e
+            JOIN users u ON e.user_id = u.id
+            JOIN teams t ON e.team_id = t.id
+            WHERE e.contest_id = %s
+            ORDER BY t.total_points DESC
+        """
+        cursor.execute(query, (contest_id,))
+        results = cursor.fetchall()
+
+        # Add ranks
+        for i, row in enumerate(results, start=1):
+            row['rank'] = i
+
+        return jsonify({"results": results}), 200
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
+
+
 
 
 @app.route('/test_env')
