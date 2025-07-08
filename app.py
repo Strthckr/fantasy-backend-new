@@ -1433,9 +1433,19 @@ def admin_statistics(current_user_email):
         total_withdraw_requests = cursor.fetchone()['total_withdraw_requests']
 
         # 7. Total commission earned (from platform_earnings table)
-        cursor.execute("SELECT SUM(commission_amount) as total_commission FROM platform_earnings")
-        commission_result = cursor.fetchone()
-        total_commission_earned = float(commission_result['total_commission'] or 0)
+   cursor.execute("""
+    SELECT 
+        ROUND(SUM(c.entry_fee * c.commission_percentage / 100 * entry_count), 2) AS total_commission
+    FROM (
+        SELECT c.id, c.entry_fee, c.commission_percentage, COUNT(e.id) AS entry_count
+        FROM contests c
+        JOIN entries e ON c.id = e.contest_id
+        GROUP BY c.id, c.entry_fee, c.commission_percentage
+    ) AS contest_data
+""")
+commission_result = cursor.fetchone()
+total_commission_earned = float(commission_result['total_commission'] or 0)
+
 
         return jsonify({
             "total_users": total_users,
