@@ -267,43 +267,43 @@ def join_contest(current_user_email):
     return jsonify({"message": f"Joined! ₹{entry_fee} deducted."})
 
 
-# Create Contest API
-@app.route('/admin/create_contest', methods=['POST'])
-@token_required
-def create_contest(current_user_email):
-    if not is_admin_user(current_user_email):
-        return jsonify({"message": "Unauthorized"}), 403
+# # Create Contest API
+# @app.route('/admin/create_contest', methods=['POST'])
+# @token_required
+# def create_contest(current_user_email):
+#     if not is_admin_user(current_user_email):
+#         return jsonify({"message": "Unauthorized"}), 403
 
-    data = request.get_json()
-    contest_name = data.get('contest_name')
-    match_id = data.get('match_id')
-    entry_fee = data.get('entry_fee')
-    total_spots = data.get('total_spots')
-    commission_percentage = data.get('commission_percentage', 15)
-    max_teams_per_user = data.get('max_teams_per_user', 1)
+#     data = request.get_json()
+#     contest_name = data.get('contest_name')
+#     match_id = data.get('match_id')
+#     entry_fee = data.get('entry_fee')
+#     total_spots = data.get('total_spots')
+#     commission_percentage = data.get('commission_percentage', 15)
+#     max_teams_per_user = data.get('max_teams_per_user', 1)
 
-    if not contest_name or not match_id or not entry_fee or not total_spots:
-        return jsonify({"message": "Missing required fields"}), 400
+#     if not contest_name or not match_id or not entry_fee or not total_spots:
+#         return jsonify({"message": "Missing required fields"}), 400
 
-    try:
-        cursor = db.cursor()
-        total_collection = float(entry_fee) * int(total_spots)
-        commission_amount = total_collection * (float(commission_percentage) / 100)
-        prize_pool = total_collection - commission_amount
+#     try:
+#         cursor = db.cursor()
+#         total_collection = float(entry_fee) * int(total_spots)
+#         commission_amount = total_collection * (float(commission_percentage) / 100)
+#         prize_pool = total_collection - commission_amount
 
-        cursor.execute("""
-            INSERT INTO contests 
-            (contest_name, match_id, entry_fee, prize_pool,
-             start_time, end_time, status, max_teams_per_user,
-             commission_percentage, total_spots)
-            VALUES (%s, %s, %s, %s, NOW(), NOW(), 'active', %s, %s, %s)
-        """, (contest_name, match_id, entry_fee, prize_pool,
-              max_teams_per_user, commission_percentage, total_spots))
+#         cursor.execute("""
+#             INSERT INTO contests 
+#             (contest_name, match_id, entry_fee, prize_pool,
+#              start_time, end_time, status, max_teams_per_user,
+#              commission_percentage, total_spots)
+#             VALUES (%s, %s, %s, %s, NOW(), NOW(), 'active', %s, %s, %s)
+#         """, (contest_name, match_id, entry_fee, prize_pool,
+#               max_teams_per_user, commission_percentage, total_spots))
 
-        db.commit()
-        return jsonify({"message": "Contest created successfully!"})
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
+#         db.commit()
+#         return jsonify({"message": "Contest created successfully!"})
+#     except mysql.connector.Error as err:
+#         return jsonify({"error": str(err)}), 500
 
 
 # List Contests API
@@ -1019,30 +1019,35 @@ def admin_create_contest(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     data = request.get_json()
-    name = data.get('name')
-    entry_fee = data.get('entry_fee')
-    prize_pool = data.get('prize_pool')
-    start_time = data.get('start_time')
-    end_time = data.get('end_time')
+    contest_name = data.get('contest_name')
     match_id = data.get('match_id')
-    max_teams_per_user = data.get('max_teams_per_user')
-    commission_percentage = data.get('commission_percentage')
+    entry_fee = data.get('entry_fee')
+    max_users = data.get('max_users')
+    commission_percentage = data.get('commission_percentage', 15)
+    max_teams_per_user = data.get('max_teams_per_user', 1)
 
-    # ✅ Validate all required fields
-    if not all([name, entry_fee, prize_pool, start_time, end_time, match_id, max_teams_per_user, commission_percentage]):
-        return jsonify({"message": "Missing contest fields"}), 400
+    if not all([contest_name, match_id, entry_fee, max_users]):
+        return jsonify({"message": "Missing required fields"}), 400
 
     try:
         cursor = db.cursor()
+
+        total_collection = float(entry_fee) * int(max_users)
+        commission_amount = total_collection * (float(commission_percentage) / 100)
+        prize_pool = total_collection - commission_amount
+
         cursor.execute("""
             INSERT INTO contests (
-                name, entry_fee, prize_pool, start_time, end_time, match_id, 
-                max_teams_per_user, commission_percentage
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                contest_name, match_id, entry_fee, prize_pool, 
+                start_time, end_time, status, max_teams_per_user, 
+                commission_percentage, max_users
+            )
+            VALUES (%s, %s, %s, %s, NOW(), NOW(), 'active', %s, %s, %s)
         """, (
-            name, entry_fee, prize_pool, start_time, end_time,
-            match_id, max_teams_per_user, commission_percentage
+            contest_name, match_id, entry_fee, prize_pool,
+            max_teams_per_user, commission_percentage, max_users
         ))
+
         db.commit()
         return jsonify({"message": "Contest created successfully!"})
 
@@ -1814,13 +1819,14 @@ def admin_get_contests(current_user_email):
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
             SELECT id, contest_name, match_id, entry_fee, prize_pool,
-                   total_spots, commission_percentage, max_teams_per_user,
+                   max_users, commission_percentage, max_teams_per_user,
                    status, start_time, end_time
             FROM contests
             ORDER BY id DESC
         """)
         contests = cursor.fetchall()
         return jsonify(contests), 200
+
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
@@ -1828,22 +1834,25 @@ def admin_get_contests(current_user_email):
 
 @app.route('/admin/update_contest', methods=['POST'])
 @token_required
-def update_contest(current_user_email):
+def admin_update_contest(current_user_email):
     if not is_admin_user(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     data = request.get_json()
     contest_id = data.get('id')
+    if not contest_id:
+        return jsonify({"message": "Missing contest ID"}), 400
+
     fields = []
     values = []
 
-    for key in ['contest_name', 'entry_fee', 'total_spots', 'commission_percentage', 'max_teams_per_user', 'status']:
+    for key in ['contest_name', 'entry_fee', 'max_users', 'commission_percentage', 'max_teams_per_user', 'status']:
         if key in data:
             fields.append(f"{key} = %s")
             values.append(data[key])
 
-    if not contest_id or not fields:
-        return jsonify({"message": "Missing required fields"}), 400
+    if not fields:
+        return jsonify({"message": "No update fields provided"}), 400
 
     values.append(contest_id)
 
@@ -1854,13 +1863,14 @@ def update_contest(current_user_email):
         """, tuple(values))
         db.commit()
         return jsonify({"message": "Contest updated successfully!"})
+
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
 
 @app.route('/admin/delete_contest', methods=['POST'])
 @token_required
-def admin_delete_contest(current_user_email):  # <-- Changed from 'delete_contest'
+def admin_delete_contest(current_user_email):
     if not is_admin_user(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
@@ -1868,13 +1878,14 @@ def admin_delete_contest(current_user_email):  # <-- Changed from 'delete_contes
     contest_id = data.get('id')
 
     if not contest_id:
-        return jsonify({"message": "Contest ID is required"}), 400
+        return jsonify({"message": "Contest ID required"}), 400
 
     try:
         cursor = db.cursor()
         cursor.execute("DELETE FROM contests WHERE id = %s", (contest_id,))
         db.commit()
         return jsonify({"message": "Contest deleted successfully!"})
+
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
