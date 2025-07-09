@@ -1012,6 +1012,7 @@ def request_withdrawal(current_user_email):
 
 
 
+# CREATE CONTEST
 @app.route('/admin/create_contest', methods=['POST'])
 @token_required
 def admin_create_contest(current_user_email):
@@ -1030,11 +1031,15 @@ def admin_create_contest(current_user_email):
         return jsonify({"message": "Missing required fields"}), 400
 
     try:
-        cursor = db.cursor()
-        total_collection = float(entry_fee) * int(max_users)
-        commission = total_collection * (float(commission_percentage) / 100)
+        entry_fee = float(entry_fee)
+        max_users = int(max_users)
+        commission_percentage = float(commission_percentage)
+
+        total_collection = entry_fee * max_users
+        commission = total_collection * (commission_percentage / 100)
         prize_pool = total_collection - commission
 
+        cursor = db.cursor()
         cursor.execute("""
             INSERT INTO contests (
                 contest_name, match_id, entry_fee, prize_pool,
@@ -1047,9 +1052,9 @@ def admin_create_contest(current_user_email):
 
         db.commit()
         return jsonify({"message": "Contest created successfully!"})
-    except mysql.connector.Error as err:
+    except Exception as err:
+        print("❌ Create contest error:", err)
         return jsonify({"error": str(err)}), 500
-
 
 @app.route('/my_teams', methods=['GET'])
 @token_required
@@ -1856,6 +1861,8 @@ def admin_update_contest(current_user_email):
         return jsonify({"error": str(err)}), 500
 
 
+
+# DELETE CONTEST
 @app.route('/admin/delete_contest', methods=['POST'])
 @token_required
 def admin_delete_contest(current_user_email):
@@ -1873,9 +1880,9 @@ def admin_delete_contest(current_user_email):
         cursor.execute("DELETE FROM contests WHERE id = %s", (contest_id,))
         db.commit()
         return jsonify({"message": "Contest deleted successfully!"})
-    except mysql.connector.Error as err:
+    except Exception as err:
+        print("❌ Delete contest error:", err)
         return jsonify({"error": str(err)}), 500
-
 
 
 
