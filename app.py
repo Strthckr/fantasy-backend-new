@@ -1012,6 +1012,42 @@ def request_withdrawal(current_user_email):
 
 
 
+@app.route('/admin/create_contest', methods=['POST'])
+@token_required
+def admin_create_contest(current_user_email):
+    if not is_admin_user(current_user_email):
+        return jsonify({"message": "Unauthorized"}), 403
+
+    data = request.get_json()
+    name = data.get('name')
+    entry_fee = data.get('entry_fee')
+    prize_pool = data.get('prize_pool')
+    start_time = data.get('start_time')
+    end_time = data.get('end_time')
+    match_id = data.get('match_id')
+    max_teams_per_user = data.get('max_teams_per_user')
+    commission_percentage = data.get('commission_percentage')
+
+    # ✅ Validate all required fields
+    if not all([name, entry_fee, prize_pool, start_time, end_time, match_id, max_teams_per_user, commission_percentage]):
+        return jsonify({"message": "Missing contest fields"}), 400
+
+    try:
+        cursor = db.cursor()
+        cursor.execute("""
+            INSERT INTO contests (
+                name, entry_fee, prize_pool, start_time, end_time, match_id, 
+                max_teams_per_user, commission_percentage
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            name, entry_fee, prize_pool, start_time, end_time,
+            match_id, max_teams_per_user, commission_percentage
+        ))
+        db.commit()
+        return jsonify({"message": "Contest created successfully!"})
+
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
 
 
 @app.route('/my_teams', methods=['GET'])
