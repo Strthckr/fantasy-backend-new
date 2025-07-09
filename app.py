@@ -1901,8 +1901,6 @@ def admin_list_entries(current_user_email, contest_id):
 
     try:
         cursor = db.cursor(dictionary=True)
-
-        # Use LEFT JOINs to prevent failure if user or team is missing
         cursor.execute("""
             SELECT e.id AS entry_id, e.team_id, e.user_id, e.joined_at,
                    u.username AS user_name,
@@ -1913,17 +1911,12 @@ def admin_list_entries(current_user_email, contest_id):
             WHERE e.contest_id = %s
             ORDER BY e.joined_at ASC
         """, (contest_id,))
-        
         entries = cursor.fetchall()
-
-        # Handle empty result gracefully
-        if not entries:
-            return jsonify([]), 200
 
         return jsonify(entries), 200
 
-    except mysql.connector.Error as err:
-        print(f"❌ Error fetching entries for contest {contest_id}:", err)
+    except Exception as err:
+        print(f"🔥 Error loading entries for contest {contest_id}:", err)
         return jsonify({"error": str(err)}), 500
 
 
