@@ -1820,15 +1820,15 @@ def admin_get_contests(current_user_email):
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
             SELECT id, contest_name, match_id, entry_fee, prize_pool,
-                   max_users, commission_percentage, max_teams_per_user,
+                   max_users, joined_users,
+                   commission_percentage, max_teams_per_user,
                    status, start_time, end_time
             FROM contests
             ORDER BY id DESC
         """)
-        return jsonify(cursor.fetchall())
+        return jsonify(cursor.fetchall()), 200
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
-
 
 
 @app.route('/admin/update_contest', methods=['POST'])
