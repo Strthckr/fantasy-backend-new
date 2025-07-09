@@ -1820,9 +1820,7 @@ def admin_get_contests(current_user_email):
             FROM contests
             ORDER BY id DESC
         """)
-        contests = cursor.fetchall()
-        return jsonify(contests), 200
-
+        return jsonify(cursor.fetchall())
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
@@ -1847,19 +1845,13 @@ def admin_update_contest(current_user_email):
             fields.append(f"{key} = %s")
             values.append(data[key])
 
-    if not fields:
-        return jsonify({"message": "No update fields provided"}), 400
-
     values.append(contest_id)
 
     try:
         cursor = db.cursor()
-        cursor.execute(f"""
-            UPDATE contests SET {', '.join(fields)} WHERE id = %s
-        """, tuple(values))
+        cursor.execute(f"UPDATE contests SET {', '.join(fields)} WHERE id = %s", tuple(values))
         db.commit()
         return jsonify({"message": "Contest updated successfully!"})
-
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
