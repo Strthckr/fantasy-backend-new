@@ -1893,6 +1893,50 @@ def admin_delete_contest(current_user_email):
 
 
 
+@app.route('/admin/contest/<int:contest_id>/entries', methods=['GET'])
+@token_required
+def admin_list_entries(current_user_email, contest_id):
+    if not is_admin_user(current_user_email):
+        return jsonify({"message": "Unauthorized"}), 403
+
+    try:
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT e.id, e.team_id, e.user_id, e.joined_at,
+                   u.username AS user_name,
+                   t.name AS team_name
+            FROM entries e
+            JOIN users u ON e.user_id = u.id
+            JOIN teams t ON e.team_id = t.id
+            WHERE e.contest_id = %s
+            ORDER BY e.joined_at ASC
+        """, (contest_id,))
+        return jsonify(cursor.fetchall()), 200
+
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
+
+
+
+@app.route('/admin/team/<int:team_id>', methods=['GET'])
+@token_required
+def admin_team_details(current_user_email, team_id):
+    if not is_admin_user(current_user_email):
+        return jsonify({"message": "Unauthorized"}), 403
+
+    try:
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT tp.player_name, tp.role, tp.credit, tp.captain, tp.vice_captain
+            FROM team_players tp
+            WHERE tp.team_id = %s
+            ORDER BY tp.player_name
+        """, (team_id,))
+        return jsonify(cursor.fetchall())
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
+
+
 
 
 
