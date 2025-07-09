@@ -1031,26 +1031,22 @@ def admin_create_contest(current_user_email):
 
     try:
         cursor = db.cursor()
-
         total_collection = float(entry_fee) * int(max_users)
-        commission_amount = total_collection * (float(commission_percentage) / 100)
-        prize_pool = total_collection - commission_amount
+        commission = total_collection * (float(commission_percentage) / 100)
+        prize_pool = total_collection - commission
 
         cursor.execute("""
             INSERT INTO contests (
-                contest_name, match_id, entry_fee, prize_pool, 
-                start_time, end_time, status, max_teams_per_user, 
+                contest_name, match_id, entry_fee, prize_pool,
+                start_time, end_time, status, max_teams_per_user,
                 commission_percentage, max_users
             )
             VALUES (%s, %s, %s, %s, NOW(), NOW(), 'active', %s, %s, %s)
-        """, (
-            contest_name, match_id, entry_fee, prize_pool,
-            max_teams_per_user, commission_percentage, max_users
-        ))
+        """, (contest_name, match_id, entry_fee, prize_pool,
+              max_teams_per_user, commission_percentage, max_users))
 
         db.commit()
         return jsonify({"message": "Contest created successfully!"})
-
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
@@ -1885,7 +1881,6 @@ def admin_delete_contest(current_user_email):
         cursor.execute("DELETE FROM contests WHERE id = %s", (contest_id,))
         db.commit()
         return jsonify({"message": "Contest deleted successfully!"})
-
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
