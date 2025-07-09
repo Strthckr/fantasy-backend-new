@@ -1871,15 +1871,22 @@ def admin_delete_contest(current_user_email):
 
     data = request.get_json()
     contest_id = data.get('id')
+    force = data.get('force', False)
 
     if not contest_id:
         return jsonify({"message": "Contest ID required"}), 400
 
     try:
         cursor = db.cursor()
+
+        if force:
+            print(f"⚠️ Force deleting contest {contest_id} — including entries")
+            cursor.execute("DELETE FROM entries WHERE contest_id = %s", (contest_id,))
+
         cursor.execute("DELETE FROM contests WHERE id = %s", (contest_id,))
         db.commit()
         return jsonify({"message": "Contest deleted successfully!"})
+
     except Exception as err:
         print("❌ Delete contest error:", err)
         return jsonify({"error": str(err)}), 500
