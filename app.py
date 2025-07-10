@@ -224,23 +224,35 @@ now = datetime.utcnow()
 @token_required
 def join_contest(current_user_email):
     """
-    Body: { "contest_id": 8 }
+    Body: { "contest_id": 8, "team_id": 36 }
     Deduct entry fee, add a row in entries, bump joined_users.
     """
     data = request.get_json()
     contest_id = data.get('contest_id')
-    if not contest_id:
-        return jsonify({"message": "Contest ID required"}), 400
+    team_id = data.get('team_id')
+
+    if not contest_id or not team_id:
+        return jsonify({"message": "Contest ID and Team ID required"}), 400
 
     cur = cursor
-    # user_id
+
+    # Get user_id from email
     cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
     row = cur.fetchone()
     if not row:
         return jsonify({"message": "User not found"}), 404
     user_id = row[0]
 
-    # contest details
+    # Validate team ownership
+    cur.execute("""
+        SELECT id FROM teams
+        WHERE id = %s AND user_id = %s AND contest_id = %s
+    """, (team_id, user_id, contest_id))
+    team = cur.fetchone()
+    if not team:
+        return jsonify({"message": "Invalid team for this user and contest"}), 400
+
+    # Contest details
     cur.execute("SELECT entry_fee, joined_users, max_users FROM contests WHERE id=%s", (contest_id,))
     row = cur.fetchone()
     if not row:
@@ -249,20 +261,22 @@ def join_contest(current_user_email):
     if joined >= max_users:
         return jsonify({"message": "Contest full"}), 400
 
-    # wallet balance
+    # Wallet balance
     cur.execute("SELECT balance FROM wallets WHERE user_id=%s", (user_id,))
     bal = cur.fetchone()[0]
     if bal < entry_fee:
         return jsonify({"message": "Insufficient balance"}), 403
 
-    # deduct and join
+    # Deduct and join
     cur.execute("UPDATE wallets SET balance = balance - %s WHERE user_id=%s", (entry_fee, user_id))
     cur.execute("UPDATE contests SET joined_users = joined_users + 1 WHERE id=%s", (contest_id,))
-    cur.execute("INSERT INTO entries (user_id, contest_id) VALUES (%s, %s)", (user_id, contest_id))
+    cur.execute("INSERT INTO entries (user_id, team_id, contest_id) VALUES (%s, %s, %s)",
+                (user_id, team_id, contest_id))
     cur.execute("""
         INSERT INTO transactions (user_id, amount, type, description)
         VALUES (%s, %s, 'debit', 'Joined contest')
     """, (user_id, entry_fee))
+
     db.commit()
     return jsonify({"message": f"Joined! ₹{entry_fee} deducted."})
 
