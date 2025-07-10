@@ -1939,26 +1939,22 @@ def admin_list_entries(current_user_email, contest_id):
         return jsonify({"error": str(err)}), 500
 
 
-@app.route('/admin/team/<int:team_id>', methods=['GET'])
+@app.route('/admin/team/<int:id>', methods=['GET'])
 @token_required
-def admin_team_details(current_user_email, team_id):
+def admin_team_details(current_user_email, id):
     if not is_admin_user(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     try:
         cursor = db.cursor(dictionary=True)
 
-        # Fetch team details including player list
-        cursor.execute("""
-            SELECT team_name, players
-            FROM teams
-            WHERE id = %s
-        """, (team_id,))
+        # Fetch team details from the teams table using id
+        cursor.execute("SELECT team_name, players FROM teams WHERE id = %s", (id,))
         team = cursor.fetchone()
         if not team:
             return jsonify({"message": "Team not found"}), 404
 
-        # Parse JSON string from players column
+        # Parse players list from JSON string
         import json
         try:
             player_list = json.loads(team["players"])
@@ -1966,13 +1962,13 @@ def admin_team_details(current_user_email, team_id):
             player_list = []
 
         return jsonify({
-            "team_id": team_id,
+            "id": id,
             "team_name": team["team_name"],
             "players": player_list
         }), 200
 
     except mysql.connector.Error as err:
-        print(f"🔥 Error fetching team {team_id}:", err)
+        print(f"🔥 Error fetching team {id}: {err}")
         return jsonify({"error": str(err)}), 500
 
 
