@@ -225,7 +225,7 @@ now = datetime.utcnow()
 def join_contest(current_user_email):
     """
     Body: { "contest_id": 8, "team_id": 36 }
-    Deduct entry fee, add a row in entries, bump joined_users.
+    Deduct entry fee, add a row in entries (with timestamp), bump joined_users.
     """
     data = request.get_json()
     contest_id = data.get('contest_id')
@@ -267,18 +267,21 @@ def join_contest(current_user_email):
     if bal < entry_fee:
         return jsonify({"message": "Insufficient balance"}), 403
 
-    # Deduct and join
+    # Deduct and join contest
     cur.execute("UPDATE wallets SET balance = balance - %s WHERE user_id=%s", (entry_fee, user_id))
     cur.execute("UPDATE contests SET joined_users = joined_users + 1 WHERE id=%s", (contest_id,))
-    cur.execute("INSERT INTO entries (user_id, team_id, contest_id) VALUES (%s, %s, %s)",
-                (user_id, team_id, contest_id))
+    cur.execute("""
+        INSERT INTO entries (user_id, team_id, contest_id)
+        VALUES (%s, %s, %s)
+    """, (user_id, team_id, contest_id))  # joined_at is auto-filled by DB
+
     cur.execute("""
         INSERT INTO transactions (user_id, amount, type, description)
         VALUES (%s, %s, 'debit', 'Joined contest')
     """, (user_id, entry_fee))
 
     db.commit()
-    return jsonify({"message": f"Joined! ₹{entry_fee} deducted."})
+    return jsonify({"message": f"Joined! ₹{entry_fee} deducted."}), 200
 
 
 # # Create Contest API
