@@ -1952,7 +1952,7 @@ def admin_team_details(current_user_email, id):
 
         cursor.execute("SELECT team_name, players FROM teams WHERE id = %s", (id,))
         team = cursor.fetchone()
-        print("🧠 Raw team:", team)  # See what's coming from DB
+        print("🧠 Raw team:", team)
 
         if not team:
             return jsonify({"message": "Team not found"}), 404
@@ -1970,8 +1970,8 @@ def admin_team_details(current_user_email, id):
             "players": player_list
         }), 200
 
-    except Exception as err:
-        print(f"🔥 Backend error:", err)
+    except mysql.connector.Error as err:
+        print(f"🔥 DB error:", err)
         return jsonify({"error": str(err)}), 500
 
 
