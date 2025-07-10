@@ -1948,32 +1948,32 @@ def admin_team_details(current_user_email, team_id):
     try:
         cursor = db.cursor(dictionary=True)
 
-        # 🔍 First, check if the team exists
-        cursor.execute("SELECT team_name FROM teams WHERE id = %s", (team_id,))
+        # Fetch team details including player list
+        cursor.execute("""
+            SELECT team_name, players
+            FROM teams
+            WHERE id = %s
+        """, (team_id,))
         team = cursor.fetchone()
         if not team:
             return jsonify({"message": "Team not found"}), 404
 
-        # 🎯 Now fetch the players
-        cursor.execute("""
-            SELECT tp.player_name, tp.role, tp.credit, tp.captain, tp.vice_captain
-            FROM team_players tp
-            WHERE tp.team_id = %s
-            ORDER BY tp.player_name
-        """, (team_id,))
-        players = cursor.fetchall()
+        # Parse JSON string from players column
+        import json
+        try:
+            player_list = json.loads(team["players"])
+        except json.JSONDecodeError:
+            player_list = []
 
-        # 📦 Final response structure
         return jsonify({
             "team_id": team_id,
             "team_name": team["team_name"],
-            "players": players if players else []
+            "players": player_list
         }), 200
 
     except mysql.connector.Error as err:
-        print(f"🔥 Error fetching team {team_id}: {err}")
+        print(f"🔥 Error fetching team {team_id}:", err)
         return jsonify({"error": str(err)}), 500
-
 
 
 
