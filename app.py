@@ -1939,7 +1939,7 @@ def admin_list_entries(current_user_email, contest_id):
         return jsonify({"error": str(err)}), 500
 
 
-@app.route('/admin/view-team/<int:id>', methods=['GET'])
+@app.route('/admin/team/<int:id>', methods=['GET'])
 @token_required
 def admin_team_details(current_user_email, id):
     if not is_admin_user(current_user_email):
