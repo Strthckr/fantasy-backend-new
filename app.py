@@ -1999,6 +1999,39 @@ def admin_team_details(current_user_email, id):
         return jsonify({"error": str(err)}), 500
 
 
+@app.route('/admin/users', methods=['GET'])
+@token_required
+def admin_users_list(current_user_email):
+    if not is_admin_user(current_user_email):
+        return jsonify({'message': 'Unauthorized'}), 403
+
+    cursor.execute("SELECT id, name, email, wallet_balance, is_admin FROM users")
+    users = cursor.fetchall()
+    return jsonify([{
+        "user_id": u[0], "name": u[1], "email": u[2],
+        "wallet": float(u[3]), "is_admin": bool(u[4])
+    } for u in users])
+
+
+
+@app.route('/admin/reset_password', methods=['POST'])
+@token_required
+def admin_password_reset(current_user_email):
+    if not is_admin_user(current_user_email):
+        return jsonify({'message': 'Unauthorized'}), 403
+
+    data = request.get_json()
+    user_id = data.get("user_id")
+    new_password = data.get("new_password")
+
+    hashed = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
+    cursor.execute("UPDATE users SET password = %s WHERE id = %s", (hashed, user_id))
+    db.commit()
+
+    return jsonify({"message": f"Password for user #{user_id} has been reset ✅"})
+
+
+
 
 
 @app.route('/test_env')
