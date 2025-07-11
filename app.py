@@ -2001,16 +2001,26 @@ def admin_team_details(current_user_email, id):
 
 @app.route('/admin/users', methods=['GET'])
 @token_required
-def admin_users_list(current_user_email):
+def get_admin_users(current_user_email):
     if not is_admin_user(current_user_email):
-        return jsonify({'message': 'Unauthorized'}), 403
+        return jsonify({"message": "Unauthorized"}), 403
 
-    cursor.execute("SELECT id, name, email, wallet_balance, is_admin FROM users")
-    users = cursor.fetchall()
-    return jsonify([{
-        "user_id": u[0], "name": u[1], "email": u[2],
-        "wallet": float(u[3]), "is_admin": bool(u[4])
-    } for u in users])
+    try:
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("SELECT id, name, email, wallet_balance, is_admin FROM users")
+        rows = cursor.fetchall()
+        return jsonify([
+            {
+                "user_id": r["id"],
+                "name": r["name"],
+                "email": r["email"],
+                "wallet": float(r["wallet_balance"]),
+                "is_admin": bool(r["is_admin"])
+            } for r in rows
+        ])
+    except Exception as err:
+        print("🔥 DB error:", err)
+        return jsonify({"error": str(err)}), 500
 
 
 
