@@ -176,44 +176,67 @@ def create_team(current_user_email):
     Body: {
       "contest_id": 8,
       "team_name": "Mighty XI",
-      "players": ["Kohli","Rohit", ... 11 total ...]
+      "players": [
+        {
+          "player_name": "PlayerA1",
+          "role": "Bowler",
+          "credit": 8.5,
+          "captain": true,
+          "vice_captain": false
+        },
+        ...
+      ]
     }
     """
-    data = request.get_json()
-    team_name  = data.get('team_name')
-    players    = data.get('players')
-    contest_id = data.get('contest_id')
+    try:
+        data = request.get_json()
+        print("✅ Incoming payload:", data)
 
-    if not team_name or not players or len(players) != 11 or not contest_id:
-        return jsonify({"message": "team_name, 11 players & contest_id required"}), 400
+        team_name  = data.get('team_name')
+        players    = data.get('players')  # now a list of dicts
+        contest_id = data.get('contest_id')
 
-    cur = cursor
-    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
-    row = cur.fetchone()
-    if not row:
-        return jsonify({"message": "User not found"}), 404
-    user_id = row[0]
+        if not team_name or not players or len(players) != 11 or not contest_id:
+            return jsonify({"message": "team_name, 11 valid players & contest_id required"}), 400
 
-    # max teams check
-    cur.execute("SELECT max_teams_per_user FROM contests WHERE id=%s", (contest_id,))
-    max_teams = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM teams WHERE user_id=%s AND contest_id=%s", (user_id, contest_id))
-    if max_teams and cur.fetchone()[0] >= max_teams:
-        return jsonify({"message": f"Only {max_teams} teams allowed in this contest"}), 403
+        cur = cursor
+        cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"message": "User not found"}), 404
+        user_id = row[0]
 
-    # duplicate team check
-    players_sorted = sorted(players)
-    cur.execute("SELECT players FROM teams WHERE user_id=%s AND contest_id=%s", (user_id, contest_id))
-    for (js,) in cur.fetchall():
-        if sorted(json.loads(js)) == players_sorted:
-            return jsonify({"message": "Same player combination already used"}), 400
+        # Max teams per user check
+        cur.execute("SELECT max_teams_per_user FROM contests WHERE id=%s", (contest_id,))
+        max_teams = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM teams WHERE user_id=%s AND contest_id=%s", (user_id, contest_id))
+        if max_teams and cur.fetchone()[0] >= max_teams:
+            return jsonify({"message": f"Only {max_teams} teams allowed in this contest"}), 403
 
-    cur.execute("""
-        INSERT INTO teams (team_name, players, user_id, contest_id)
-        VALUES (%s, %s, %s, %s)
-    """, (team_name, json.dumps(players), user_id, contest_id))
-    db.commit()
-    return jsonify({"message": "Team created ✔"})
+        # Duplicate team check (based on player_name only)
+        submitted_names = sorted([p['player_name'] for p in players])
+        cur.execute("SELECT players FROM teams WHERE user_id=%s AND contest_id=%s", (user_id, contest_id))
+        for (js,) in cur.fetchall():
+            try:
+                existing = json.loads(js)
+                existing_names = sorted([p['player_name'] for p in existing])
+                if existing_names == submitted_names:
+                    return jsonify({"message": "Same player combination already used"}), 400
+            except Exception as e:
+                continue  # ignore if existing row can't parse
+
+        # Store full player objects as JSON
+        cur.execute("""
+            INSERT INTO teams (team_name, players, user_id, contest_id)
+            VALUES (%s, %s, %s, %s)
+        """, (team_name, json.dumps(players), user_id, contest_id))
+        db.commit()
+
+        return jsonify({"message": "Team created ✔"})
+    
+    except Exception as e:
+        print("❌ Backend error during team creation:", str(e))
+        return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
 
 # Join Contest API
 now = datetime.utcnow()
