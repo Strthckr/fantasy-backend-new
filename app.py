@@ -2008,15 +2008,15 @@ def get_admin_users(current_user_email):
     try:
         cursor = db.cursor(dictionary=True)
         cursor.execute("SELECT id, name, email, wallet_balance, is_admin FROM users")
-        rows = cursor.fetchall()
+        users = cursor.fetchall()
         return jsonify([
             {
-                "user_id": r["id"],
-                "name": r["name"],
-                "email": r["email"],
-                "wallet": float(r["wallet_balance"]),
-                "is_admin": bool(r["is_admin"])
-            } for r in rows
+                "user_id": u["id"],
+                "name": u["name"],
+                "email": u["email"],
+                "wallet": float(u["wallet_balance"]),
+                "is_admin": bool(u["is_admin"])
+            } for u in users
         ])
     except Exception as err:
         print("🔥 DB error:", err)
