@@ -22,7 +22,8 @@ print("✅ SECRET_KEY:", os.getenv("SECRET_KEY"))
 
 
 app = Flask(__name__)
-CORS(app, origins=["http://localhost:3000"])
+app = Flask(__name__)
+CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')  # Use env secret or fallback
 print("✅ SECRET_KEY loaded:", app.config['SECRET_KEY'])
 
