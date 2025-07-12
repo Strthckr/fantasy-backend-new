@@ -80,6 +80,14 @@ def is_admin_user(email):
     result = cursor.fetchone()
     return result and result[0] == 1
 
+def _build_cors_preflight_response():
+    response = jsonify({})
+    h = response.headers
+    h['Access-Control-Allow-Origin']  = 'http://localhost:3000'
+    h['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
+    h['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+    return response
+
 
 @app.route('/')
 def home():
@@ -2089,75 +2097,112 @@ def get_user_earnings(user_id):
 
 
 
-@app.route('/admin/wallet_adjust', methods=['POST'])
+# 3) Adjust Wallet Balance
+@app.route('/admin/wallet_adjust', methods=['POST', 'OPTIONS'])
 @token_required
 def adjust_wallet(current_user_email):
-    data = request.get_json()
-    user_id = data['user_id']
-    amount = data['amount']          # positive to credit, negative to debit
-    note = data.get('note', "")      # e.g. "Manual top-up"
-    try:
-        cursor = db.cursor()
-        cursor.execute("""
-            UPDATE wallets 
-            SET balance = balance + %s 
-            WHERE user_id = %s
-        """, (amount, user_id))
-        # insert a transaction record
-        cursor.execute("""
-            INSERT INTO transactions (user_id, type, amount, message)
-            VALUES (%s, %s, %s, %s)
-        """, (user_id, "credit" if amount > 0 else "debit", abs(amount), note))
-        db.commit()
-        return jsonify({"message": "Wallet adjusted"}), 200
-    except Exception as e:
-        db.rollback()
-        return jsonify({"error": str(e)}), 500
+    if request.method == 'OPTIONS':
+        return _build_cors_preflight_response()
 
-
-
-
-
-@app.route('/admin/toggle_admin', methods=['POST'])
-@token_required
-def toggle_admin(current_user_email):
-    data = request.get_json()
-    user_id = data['user_id']
-    try:
-        cursor = db.cursor()
-        cursor.execute("""
-            UPDATE users 
-            SET is_admin = 1 - is_admin 
-            WHERE id = %s
-        """, (user_id,))
-        db.commit()
-        return jsonify({"message": "Admin status toggled"}), 200
-    except Exception as e:
-        db.rollback()
-        return jsonify({"error": str(e)}), 500
-
-
-
-@app.route('/admin/ban_user', methods=['POST'])
-@token_required
-def ban_user(current_user_email):
     if not is_admin_user(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
-    data = request.get_json()
+    try:
+        data = request.get_json(force=True)
+        user_id = data['user_id']
+        amount  = float(data['amount'])
+        note    = data.get('note', '')
+
+        cursor = db.cursor()
+        cursor.execute(
+            "UPDATE wallets SET balance = balance + %s WHERE user_id = %s",
+            (amount, user_id)
+        )
+        if cursor.rowcount == 0:
+            raise Exception("No wallet row for user")
+
+        cursor.execute(
+            "INSERT INTO transactions (user_id, type, amount, message) "
+            "VALUES (%s, %s, %s, %s)",
+            (
+                user_id,
+                "credit" if amount > 0 else "debit",
+                abs(amount),
+                note
+            )
+        )
+        db.commit()
+        return jsonify({"message": "Wallet adjusted"}), 200
+
+    except Exception as e:
+        db.rollback()
+        print("WALLET_ADJUST ERROR:", e)
+        return jsonify({"error": str(e)}), 500
+
+
+
+#Toggle Admin Status
+@app.route('/admin/toggle_admin', methods=['POST', 'OPTIONS'])
+@token_required
+def toggle_admin(current_user_email):
+    if request.method == 'OPTIONS':
+        return _build_cors_preflight_response()
+
+    if not is_admin_user(current_user_email):
+        return jsonify({"message": "Unauthorized"}), 403
+
+    data = request.get_json(force=True)
     user_id = data.get('user_id')
     if not user_id:
         return jsonify({"message": "user_id required"}), 400
 
     try:
         cursor = db.cursor()
-        # Flip is_banned: 1 → 0 or 0 → 1
+        cursor.execute("SELECT is_admin FROM users WHERE id = %s", (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({"message": "User not found"}), 404
+
+        new_flag = 1 - int(row[0])
+        cursor.execute(
+            "UPDATE users SET is_admin = %s WHERE id = %s",
+            (new_flag, user_id)
+        )
+        db.commit()
+        return jsonify({
+            "message": "Admin status updated",
+            "new_status": bool(new_flag)
+        }), 200
+
+    except Exception as e:
+        db.rollback()
+        print("TOGGLE_ADMIN ERROR:", e)
+        return jsonify({"message": str(e)}), 500
+
+
+# 2) Ban / Unban User
+@app.route('/admin/ban_user', methods=['POST', 'OPTIONS'])
+@token_required
+def ban_user(current_user_email):
+    if request.method == 'OPTIONS':
+        return _build_cors_preflight_response()
+
+    if not is_admin_user(current_user_email):
+        return jsonify({"message": "Unauthorized"}), 403
+
+    data = request.get_json(force=True)
+    user_id = data.get('user_id')
+    if not user_id:
+        return jsonify({"message": "user_id required"}), 400
+
+    try:
+        cursor = db.cursor()
         cursor.execute("SELECT is_banned FROM users WHERE id = %s", (user_id,))
         row = cursor.fetchone()
         if not row:
             return jsonify({"message": "User not found"}), 404
-        new_flag = 1 - int(row[0])
 
+        new_flag = 1 - int(row[0])
         cursor.execute(
             "UPDATE users SET is_banned = %s WHERE id = %s",
             (new_flag, user_id)
@@ -2170,8 +2215,8 @@ def ban_user(current_user_email):
 
     except Exception as e:
         db.rollback()
+        print("BAN_USER ERROR:", e)
         return jsonify({"message": str(e)}), 500
-
 
 
 
