@@ -2008,20 +2008,18 @@ def get_admin_users(current_user_email):
     try:
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
-            SELECT u.id, u.username, u.email, u.is_admin, u.registered_at, w.balance
+            SELECT u.id, u.username, u.email, u.is_admin, w.balance
             FROM users u
             LEFT JOIN wallets w ON u.id = w.user_id
         """)
         users = cursor.fetchall()
-
         return jsonify([
             {
                 "user_id": u["id"],
                 "name": u["username"],
                 "email": u["email"],
                 "wallet": float(u["balance"]) if u["balance"] is not None else 0.0,
-                "is_admin": bool(u["is_admin"]),
-                "registered_at": u["registered_at"]
+                "is_admin": bool(u["is_admin"])
             } for u in users
         ])
     except Exception as err:
