@@ -2019,7 +2019,7 @@ def get_admin_users(current_user_email):
                 "email": u["email"],
                 "wallet": float(u["balance"]) if u["balance"] is not None else 0.0,
                 "is_admin": bool(u["is_admin"]),
-                "registered_at": u["registered_at"]
+                "registered_at": u["registered_at"]  # ✅ Added safely
             } for u in users
         ])
     except Exception as err:
