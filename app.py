@@ -2011,11 +2011,14 @@ def get_admin_users(current_user_email):
             SELECT 
                 u.id, u.username, u.email, u.is_admin, u.registered_at, w.balance,
                 IFNULL((SELECT SUM(amount) FROM transactions WHERE user_id = u.id AND type = 'credit'), 0) AS total_earning,
-                IFNULL((SELECT SUM(amount) FROM transactions WHERE user_id = u.id AND type = 'debit'), 0) AS total_loss
+                IFNULL((SELECT SUM(amount) FROM transactions WHERE user_id = u.id AND type = 'debit'), 0) AS total_loss,
+                IFNULL((SELECT COUNT(*) FROM entries WHERE user_id = u.id), 0) AS contest_count,
+                (SELECT MAX(joined_at) FROM entries WHERE user_id = u.id) AS last_contest_date
             FROM users u
             LEFT JOIN wallets w ON u.id = w.user_id
         """)
         users = cursor.fetchall()
+
         return jsonify([
             {
                 "user_id": u["id"],
@@ -2025,7 +2028,9 @@ def get_admin_users(current_user_email):
                 "is_admin": bool(u["is_admin"]),
                 "registered_at": u["registered_at"],
                 "total_earning": float(u["total_earning"]),
-                "total_loss": float(u["total_loss"])
+                "total_loss": float(u["total_loss"]),
+                "contest_count": int(u["contest_count"]),
+                "last_contest_date": u["last_contest_date"]
             } for u in users
         ])
     except Exception as err:
