@@ -2102,35 +2102,42 @@ def get_user_earnings(user_id):
 
 
 
+
 @app.route('/admin/wallet_adjust', methods=['POST', 'OPTIONS'])
 @token_required
 def adjust_wallet(current_user_email):
-    # Allow CORS preflight through
+    # 1) CORS preflight
     if request.method == 'OPTIONS':
         return make_response('', 204)
 
+    # 2) Only admins can adjust
+    if not is_admin_user(current_user_email):
+        return jsonify({"message": "Unauthorized"}), 403
+
     try:
+        # 3) Parse payload
         data    = request.get_json(force=True)
         user_id = data['user_id']
         amount  = float(data['amount'])
         note    = data.get('note', '')
 
         cursor = db.cursor()
-        # 1) Try updating existing wallet
+
+        # 4) Update existing wallet, or insert one if missing
         cursor.execute(
             "UPDATE wallets SET balance = balance + %s WHERE user_id = %s",
             (amount, user_id)
         )
-        # 2) If no row existed, insert a new one
         if cursor.rowcount == 0:
             cursor.execute(
                 "INSERT INTO wallets (user_id, balance) VALUES (%s, %s)",
                 (user_id, amount)
             )
 
-        # 3) Log the transaction
+        # 5) Record the transaction in `transactions.description`
         cursor.execute(
-            "INSERT INTO transactions (user_id, type, amount, message) "
+            "INSERT INTO transactions "
+            "(user_id, type, amount, description) "
             "VALUES (%s, %s, %s, %s)",
             (
                 user_id,
@@ -2142,11 +2149,11 @@ def adjust_wallet(current_user_email):
 
         db.commit()
         return jsonify({"message": "Wallet adjusted"}), 200
+
     except Exception as e:
         db.rollback()
-        print("❌ WALLET_ADJUST ERROR:", repr(e))
+        print("❌ WALLET_ADJUST ERROR:", e)
         return jsonify({"error": str(e)}), 500
-
 
 
 
