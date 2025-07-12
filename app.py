@@ -2097,29 +2097,53 @@ def get_user_earnings(user_id):
 
 
 
-@app.route('/admin/wallet_adjust', methods=['POST'])
+@app.route('/admin/wallet_adjust', methods=['POST','OPTIONS'])
 @token_required
 def adjust_wallet(current_user_email):
-    data = request.get_json()
-    user_id = data['user_id']
-    amount = data['amount']          # positive to credit, negative to debit
-    note = data.get('note', "")      # e.g. "Manual top-up"
+    if request.method == 'OPTIONS':
+        return _build_cors_preflight_response()
+
+    print("🔧 adjust_wallet called by:", current_user_email)
     try:
+        data    = request.get_json(force=True)
+        user_id = data.get('user_id')
+        amount  = float(data.get('amount', 0))
+        note    = data.get('note', "")
+
+        print("→ Payload:", data)
+
         cursor = db.cursor()
-        cursor.execute("""
-            UPDATE wallets 
-            SET balance = balance + %s 
-            WHERE user_id = %s
-        """, (amount, user_id))
-        # insert a transaction record
-        cursor.execute("""
-            INSERT INTO transactions (user_id, type, amount, message)
-            VALUES (%s, %s, %s, %s)
-        """, (user_id, "credit" if amount > 0 else "debit", abs(amount), note))
+        cursor.execute(
+            "UPDATE wallets SET balance = balance + %s WHERE user_id = %s",
+            (amount, user_id)
+        )
+        print("→ UPDATE rowcount:", cursor.rowcount)
+
+        if cursor.rowcount == 0:
+            # No wallet row exists
+            print("→ No wallet row for user, inserting new one")
+            cursor.execute(
+              "INSERT INTO wallets (user_id, balance) VALUES (%s, %s)",
+              (user_id, amount)
+            )
+
+        cursor.execute(
+            "INSERT INTO transactions (user_id, type, amount, message) "
+            "VALUES (%s,%s,%s,%s)",
+            (
+              user_id,
+              "credit" if amount > 0 else "debit",
+              abs(amount),
+              note
+            )
+        )
         db.commit()
-        return jsonify({"message": "Wallet adjusted"}), 200
+        print("✅ WALLET_ADJUST SUCCESS")
+        return jsonify({"message":"Wallet adjusted"}), 200
+
     except Exception as e:
         db.rollback()
+        print("❌ WALLET_ADJUST ERROR:", repr(e))
         return jsonify({"error": str(e)}), 500
 
 
