@@ -2009,9 +2009,11 @@ def get_admin_users(current_user_email):
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
             SELECT 
-                u.id, u.username, u.email, u.is_admin, u.registered_at, w.balance,
-                IFNULL((SELECT SUM(amount) FROM transactions WHERE user_id = u.id AND type = 'credit'), 0) AS total_earning,
-                IFNULL((SELECT SUM(amount) FROM transactions WHERE user_id = u.id AND type = 'debit'), 0) AS total_loss,
+                u.id, u.username, u.email, u.is_admin, u.is_banned, w.balance,
+                IFNULL((SELECT SUM(amount) FROM transactions 
+                        WHERE user_id = u.id AND type = 'credit'), 0) AS total_earning,
+                IFNULL((SELECT SUM(amount) FROM transactions 
+                        WHERE user_id = u.id AND type = 'debit'), 0) AS total_loss,
                 IFNULL((SELECT COUNT(*) FROM entries WHERE user_id = u.id), 0) AS contest_count,
                 (SELECT MAX(joined_at) FROM entries WHERE user_id = u.id) AS last_contest_date
             FROM users u
@@ -2024,9 +2026,9 @@ def get_admin_users(current_user_email):
                 "user_id": u["id"],
                 "name": u["username"],
                 "email": u["email"],
-                "wallet": float(u["balance"]) if u["balance"] is not None else 0.0,
+                "wallet": float(u["balance"] or 0),
                 "is_admin": bool(u["is_admin"]),
-                "registered_at": u["registered_at"],
+                "is_banned": bool(u["is_banned"]),
                 "total_earning": float(u["total_earning"]),
                 "total_loss": float(u["total_loss"]),
                 "contest_count": int(u["contest_count"]),
@@ -2134,6 +2136,41 @@ def toggle_admin(current_user_email):
         db.rollback()
         return jsonify({"error": str(e)}), 500
 
+
+
+@app.route('/admin/ban_user', methods=['POST'])
+@token_required
+def ban_user(current_user_email):
+    if not is_admin_user(current_user_email):
+        return jsonify({"message": "Unauthorized"}), 403
+
+    data = request.get_json()
+    user_id = data.get('user_id')
+    if not user_id:
+        return jsonify({"message": "user_id required"}), 400
+
+    try:
+        cursor = db.cursor()
+        # Flip is_banned: 1 → 0 or 0 → 1
+        cursor.execute("SELECT is_banned FROM users WHERE id = %s", (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({"message": "User not found"}), 404
+        new_flag = 1 - int(row[0])
+
+        cursor.execute(
+            "UPDATE users SET is_banned = %s WHERE id = %s",
+            (new_flag, user_id)
+        )
+        db.commit()
+        return jsonify({
+            "message": "Ban status updated",
+            "is_banned": bool(new_flag)
+        }), 200
+
+    except Exception as e:
+        db.rollback()
+        return jsonify({"message": str(e)}), 500
 
 
 
