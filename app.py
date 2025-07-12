@@ -41,57 +41,37 @@ db = mysql.connector.connect(
 
 
 cursor = db.cursor()
-from functools import wraps
-from flask import request, jsonify
-import jwt
-from datetime import datetime
-
-# This decorator is used to protect routes and require a valid JWT token.
+# Token decorator to protect routes
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
+        # 1) Allow CORS preflight to pass un-checked
+        if request.method == 'OPTIONS':
+            resp = make_response('', 204)
+            # These headers get added by flask-cors, but we re-declare to be safe
+            resp.headers['Access-Control-Allow-Origin']  = 'http://localhost:3000'
+            resp.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
+            resp.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+            return resp
+
+        # 2) Now enforce JWT
         token = None
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]
 
-        # Step 1: Check if the Authorization header is present
-        if 'Authorization' in request.headers:
-            auth_header = request.headers['Authorization']
-
-            # Header format is usually: "Bearer <token>"
-            if auth_header.startswith("Bearer "):
-                token = auth_header.split(" ")[1]  # Extract token part
-
-        # Step 2: If token is missing, deny access
         if not token:
             return jsonify({'message': 'Token is missing!'}), 403
 
         try:
-            # Step 3: Decode the token using your app's secret key
-            data = jwt.decode(
-                token,
-                app.config['SECRET_KEY'],
-                algorithms=["HS256"]
-            )
-
-            # Step 4: Print token expiry info for debugging (in UTC)
-            print("✅ Token expiry time (UTC):", datetime.fromtimestamp(data['exp']))
-            print("✅ Current UTC time:", datetime.utcnow())
-
-            # Step 5: Get current user's email from decoded token
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
             current_user_email = data['email']
-
         except jwt.ExpiredSignatureError:
-            # Token is expired
-            print("❌ Token expired error caught!")
             return jsonify({'message': 'Token has expired! Please login again.'}), 401
-
         except jwt.InvalidTokenError:
-            # Token is invalid
-            print("❌ Invalid token error caught!")
             return jsonify({'message': 'Invalid token!'}), 401
 
-        # Step 6: If token is valid, proceed with the request
         return f(current_user_email, *args, **kwargs)
-
     return decorated
 
 
