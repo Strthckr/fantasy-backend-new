@@ -47,31 +47,35 @@ cursor = db.cursor()
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        token = None
+        # 1) Allow CORS preflight to pass un-checked
+        if request.method == 'OPTIONS':
+            resp = make_response('', 204)
+            # These headers get added by flask-cors, but we re-declare to be safe
+            resp.headers['Access-Control-Allow-Origin']  = 'http://localhost:3000'
+            resp.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
+            resp.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+            return resp
 
-        if 'Authorization' in request.headers:
-            auth_header = request.headers['Authorization']
-            if auth_header.startswith("Bearer "):
-                token = auth_header.split(" ")[1]
+        # 2) Now enforce JWT
+        token = None
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]
 
         if not token:
             return jsonify({'message': 'Token is missing!'}), 403
 
         try:
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
-            print("✅ Token expiry time (UTC):", datetime.fromtimestamp(data['exp']))
-            print("✅ Current UTC time:", datetime.utcnow())
-
             current_user_email = data['email']
         except jwt.ExpiredSignatureError:
-            print("❌ Token expired error caught!")
             return jsonify({'message': 'Token has expired! Please login again.'}), 401
         except jwt.InvalidTokenError:
-            print("❌ Invalid token error caught!")
             return jsonify({'message': 'Invalid token!'}), 401
 
         return f(current_user_email, *args, **kwargs)
     return decorated
+
 
 # Function to check if user is admin
 def is_admin_user(email):
