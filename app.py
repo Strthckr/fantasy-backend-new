@@ -2008,18 +2008,28 @@ def get_admin_users(current_user_email):
     try:
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
-            SELECT u.id, u.username, u.email, u.is_admin, w.balance
+            SELECT 
+                u.id, u.username, u.email, u.is_admin, w.balance,
+                (
+                    SELECT CONCAT_WS(' | ', t.type, t.amount, t.message)
+                    FROM transactions t
+                    WHERE t.user_id = u.id
+                    ORDER BY t.timestamp DESC
+                    LIMIT 1
+                ) AS last_txn
             FROM users u
             LEFT JOIN wallets w ON u.id = w.user_id
         """)
         users = cursor.fetchall()
+
         return jsonify([
             {
                 "user_id": u["id"],
                 "name": u["username"],
                 "email": u["email"],
                 "wallet": float(u["balance"]) if u["balance"] is not None else 0.0,
-                "is_admin": bool(u["is_admin"])
+                "is_admin": bool(u["is_admin"]),
+                "last_txn": u["last_txn"] or ""
             } for u in users
         ])
     except Exception as err:
