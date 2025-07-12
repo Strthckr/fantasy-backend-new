@@ -2008,7 +2008,10 @@ def get_admin_users(current_user_email):
     try:
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
-            SELECT u.id, u.username, u.email, u.is_admin, w.balance
+            SELECT 
+                u.id, u.username, u.email, u.is_admin, u.registered_at, w.balance,
+                IFNULL((SELECT SUM(amount) FROM transactions WHERE user_id = u.id AND type = 'credit'), 0) AS total_earning,
+                IFNULL((SELECT SUM(amount) FROM transactions WHERE user_id = u.id AND type = 'debit'), 0) AS total_loss
             FROM users u
             LEFT JOIN wallets w ON u.id = w.user_id
         """)
@@ -2019,7 +2022,10 @@ def get_admin_users(current_user_email):
                 "name": u["username"],
                 "email": u["email"],
                 "wallet": float(u["balance"]) if u["balance"] is not None else 0.0,
-                "is_admin": bool(u["is_admin"])
+                "is_admin": bool(u["is_admin"]),
+                "registered_at": u["registered_at"],
+                "total_earning": float(u["total_earning"]),
+                "total_loss": float(u["total_loss"])
             } for u in users
         ])
     except Exception as err:
@@ -2044,6 +2050,34 @@ def admin_password_reset(current_user_email):
 
     return jsonify({"message": f"Password for user #{user_id} has been reset ✅"})
 
+
+@app.route('/admin/user_earnings/<int:user_id>', methods=['GET'])
+@token_required
+def get_user_earnings(user_id):
+    try:
+        cursor = db.cursor(dictionary=True)
+
+        # Fetch all transactions
+        cursor.execute("""
+            SELECT type, amount, message, timestamp
+            FROM transactions
+            WHERE user_id = %s
+            ORDER BY timestamp DESC
+        """, (user_id,))
+        history = cursor.fetchall()
+
+        # Calculate totals
+        total_earnings = sum(t["amount"] for t in history if t["type"] == "credit")
+        total_losses = sum(t["amount"] for t in history if t["type"] == "debit")
+
+        return jsonify({
+            "total_earnings": round(total_earnings, 2),
+            "total_losses": round(total_losses, 2),
+            "history": history
+        })
+    except Exception as err:
+        print("🔥 Earnings fetch error:", err)
+        return jsonify({"error": str(err)}), 500
 
 
 
