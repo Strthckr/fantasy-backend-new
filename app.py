@@ -1998,7 +1998,6 @@ def admin_team_details(current_user_email, id):
         print(f"🔥 DB error:", err)
         return jsonify({"error": str(err)}), 500
 
-
 @app.route('/admin/users', methods=['GET'])
 @token_required
 def get_admin_users(current_user_email):
@@ -2008,7 +2007,7 @@ def get_admin_users(current_user_email):
     try:
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
-            SELECT u.id, u.username, u.email, u.is_admin, w.balance
+            SELECT u.id, u.username, u.email, u.is_admin, u.registered_at, w.balance
             FROM users u
             LEFT JOIN wallets w ON u.id = w.user_id
         """)
@@ -2019,7 +2018,8 @@ def get_admin_users(current_user_email):
                 "name": u["username"],
                 "email": u["email"],
                 "wallet": float(u["balance"]) if u["balance"] is not None else 0.0,
-                "is_admin": bool(u["is_admin"])
+                "is_admin": bool(u["is_admin"]),
+                "registered_at": u["registered_at"]
             } for u in users
         ])
     except Exception as err:
