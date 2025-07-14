@@ -2261,27 +2261,59 @@ def get_user_transactions(current_user_email, user_id):
 
     try:
         cursor = db.cursor(dictionary=True)
+
+        # Fetch all transactions for the user
         cursor.execute("""
             SELECT 
-              t.created_at,
-              t.type,
-              t.amount,
-              t.description,
-              ce.contest_id,
-              c.name    AS contest_name,
-              m.title   AS match_title
+                t.id,
+                t.created_at,
+                t.type,
+                t.amount,
+                t.description
             FROM transactions t
-            LEFT JOIN entries ce ON ce.transaction_id = t.id
-            LEFT JOIN contests c ON ce.contest_id = c.id
-            LEFT JOIN matches m  ON c.match_id     = m.id
             WHERE t.user_id = %s
             ORDER BY t.created_at DESC
         """, (user_id,))
-        rows = cursor.fetchall()
-        return jsonify(rows), 200
+        transactions = cursor.fetchall()
+
+        enriched = []
+        for t in transactions:
+            contest_name = None
+            match_title  = None
+
+            # If it's a debit, try to find the contest joined at that time
+            if t["type"] == "debit":
+                cursor.execute("""
+                    SELECT 
+                        c.name    AS contest_name,
+                        m.title   AS match_title
+                    FROM entries e
+                    JOIN contests c ON e.contest_id = c.id
+                    JOIN matches m  ON c.match_id   = m.id
+                    WHERE e.user_id = %s
+                      AND ABS(TIMESTAMPDIFF(SECOND, e.joined_at, %s)) < 5
+                    LIMIT 1
+                """, (user_id, t["created_at"]))
+                row = cursor.fetchone()
+                if row:
+                    contest_name = row["contest_name"]
+                    match_title  = row["match_title"]
+
+            enriched.append({
+                "created_at":    t["created_at"],
+                "type":          t["type"],
+                "amount":        float(t["amount"]),
+                "description":   t["description"],
+                "contest_name":  contest_name,
+                "match_title":   match_title
+            })
+
+        return jsonify(enriched), 200
 
     except Exception as e:
         print("🔥 Error fetching transactions:", e)
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 
