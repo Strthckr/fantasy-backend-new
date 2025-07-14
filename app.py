@@ -2262,17 +2262,17 @@ def get_user_transactions(current_user_email, user_id):
     try:
         cursor = db.cursor(dictionary=True)
 
-        # Fetch all transactions for the user
+        # Fetch all transactions
         cursor.execute("""
             SELECT 
-                t.id,
-                t.created_at,
-                t.type,
-                t.amount,
-                t.description
-            FROM transactions t
-            WHERE t.user_id = %s
-            ORDER BY t.created_at DESC
+                id,
+                created_at,
+                type,
+                amount,
+                description
+            FROM transactions
+            WHERE user_id = %s
+            ORDER BY created_at DESC
         """, (user_id,))
         transactions = cursor.fetchall()
 
@@ -2281,17 +2281,17 @@ def get_user_transactions(current_user_email, user_id):
             contest_name = None
             match_title  = None
 
-            # If it's a debit, try to find the contest joined at that time
-            if t["type"] == "debit":
+            if t["type"] == "debit" and "Joined contest" in (t["description"] or ""):
                 cursor.execute("""
                     SELECT 
-                        c.name    AS contest_name,
-                        m.title   AS match_title
+                        c.contest_name,
+                        m.title AS match_title
                     FROM entries e
                     JOIN contests c ON e.contest_id = c.id
-                    JOIN matches m  ON c.match_id   = m.id
+                    JOIN matches m  ON c.match_id = m.id
                     WHERE e.user_id = %s
-                      AND ABS(TIMESTAMPDIFF(SECOND, e.joined_at, %s)) < 5
+                      AND e.joined_at <= %s
+                    ORDER BY e.joined_at DESC
                     LIMIT 1
                 """, (user_id, t["created_at"]))
                 row = cursor.fetchone()
@@ -2302,7 +2302,7 @@ def get_user_transactions(current_user_email, user_id):
             enriched.append({
                 "created_at":    t["created_at"],
                 "type":          t["type"],
-                "amount":        float(t["amount"]),
+                "amount":        float(t["amount"] or 0),
                 "description":   t["description"],
                 "contest_name":  contest_name,
                 "match_title":   match_title
