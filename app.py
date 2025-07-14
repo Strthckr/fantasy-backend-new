@@ -163,122 +163,19 @@ def signup():
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 400
 
-@app.route('/user/dashboard', methods=['GET', 'OPTIONS'])
+@app.route('/dashboard', methods=['GET'])
 @token_required
-def user_dashboard(current_user_email):
-    if request.method == 'OPTIONS':
-        return make_response('', 204)
-
-    # fetch user ID
-    cur = db.cursor()
-    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
-    user_id = cur.fetchone()[0]
-
-    # 1) Wallet & earnings/spend
-    cur.execute("""
-      SELECT
-        COALESCE(SUM(CASE WHEN type='credit' THEN amount ELSE 0 END),0),
-        COALESCE(SUM(CASE WHEN type='debit'  THEN amount ELSE 0 END),0)
-      FROM transactions
-      WHERE user_id = %s
-    """, (user_id,))
-    total_credits, total_debits = cur.fetchone()
-    wallet_balance = round(total_credits - total_debits, 2)
-
-    # 2) Upcoming matches (next 5)
-    cur.execute("""
-      SELECT id, match_name, start_time
-      FROM matches
-      WHERE status='upcoming'
-      ORDER BY start_time
-      LIMIT 5
-    """)
-    upcoming = [
-      {'id': r[0], 'match_name': r[1], 'start_time': r[2].isoformat()}
-      for r in cur.fetchall()
-    ]
-
-    # 3) Active contests user joined (live)
-    cur.execute("""
-      SELECT c.id, c.contest_name, c.prize_pool, ce.id AS entry_id
-      FROM contests c
-      JOIN entries ce ON ce.contest_id = c.id
-      WHERE ce.user_id=%s AND c.status='live'
-      LIMIT 5
-    """, (user_id,))
-    active = [{
-      'contest_id': r[0],
-      'contest_name': r[1],
-      'prize_pool': float(r[2]),
-      'entry_id': r[3]
-    } for r in cur.fetchall()]
-
-    # 4) Recent 5 transactions
-    cur.execute("""
-      SELECT id, amount, type, description, created_at
-      FROM transactions
-      WHERE user_id=%s
-      ORDER BY created_at DESC
-      LIMIT 5
-    """, (user_id,))
-    recent_tx = [{
-      'id': r[0],
-      'amount': float(r[1]),
-      'type': r[2],
-      'description': r[3],
-      'date': r[4].isoformat()
-    } for r in cur.fetchall()]
-
-    # 5) Latest 3 contest results
-    cur.execute("""
-      SELECT c.id, c.contest_name,
-        SUM(CASE WHEN t.type='credit' THEN t.amount ELSE 0 END)
-        AS won_amount
-      FROM contests c
-      JOIN entries ce ON ce.contest_id=c.id
-      LEFT JOIN transactions t
-        ON t.user_id=ce.user_id
-        AND LOWER(t.description) LIKE '%prize%'
-        AND t.created_at BETWEEN c.end_time AND NOW()
-      WHERE ce.user_id=%s AND c.status='completed'
-      GROUP BY c.id, c.contest_name
-      ORDER BY c.end_time DESC
-      LIMIT 3
-    """, (user_id,))
-    results = []
-    for contest_id, name, won in cur.fetchall():
-      results.append({
-        'contest_id': contest_id,
-        'contest_name': name,
-        'won_amount': float(won or 0)
-      })
-
-    # 6) Daily net for past 7 days
-    cur.execute("""
-      SELECT DATE(created_at) AS day,
-        SUM(CASE WHEN type='credit' THEN amount ELSE -amount END) AS net
-      FROM transactions
-      WHERE user_id=%s
-        AND created_at >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
-      GROUP BY day
-      ORDER BY day
-    """, (user_id,))
-    spark = [{
-      'day': r[0].isoformat(),
-      'net': float(r[1] or 0)
-    } for r in cur.fetchall()]
-
-    return jsonify({
-      'wallet_balance': wallet_balance,
-      'total_earnings': round(total_credits, 2),
-      'total_spend':    round(total_debits, 2),
-      'net_balance':    wallet_balance,
-      'upcomingMatches': upcoming,
-      'activeContests':  active,
-      'recentTransactions': recent_tx,
-      'recentResults':  results,
-      'dailyNetHistory': spark
-    }), 200
+def dashboard(current_user_email):
+    try:
+        cursor = db.cursor()
+        cursor.execute("SELECT username FROM users WHERE email = %s", (current_user_email,))
+        user = cursor.fetchone()
+        if user:
+            return jsonify({"message": f"Welcome to your dashboard, {user[0]}!"})
+        else:
+            return jsonify({"message": "User not found"}), 404
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
 
 
 
