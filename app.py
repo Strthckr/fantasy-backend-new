@@ -2255,44 +2255,76 @@ def ban_user(current_user_email):
 
 
 
-@app.route('/admin/user_transactions/<int:user_id>', methods=['GET'])
+@app.route('/admin/user_transactions/<int:user_id>', methods=['GET','OPTIONS'])
 @token_required
 def get_user_transactions(current_user_email, user_id):
+    # 1) Preflight
+    if request.method == 'OPTIONS':
+        return make_response('', 204)
+
+    # 2) Admin check
     if not is_admin_user(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     try:
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
-            SELECT 
-                created_at,
-                type,
-                amount,
-                description
+            SELECT created_at, type, amount, description
             FROM transactions
             WHERE user_id = %s
             ORDER BY created_at DESC
         """, (user_id,))
         rows = cursor.fetchall()
 
-        # Convert to JSON-friendly types
-        txns = [
-            {
-                "created_at":  r["created_at"].isoformat(),
-                "type":        r["type"],
-                "amount":      float(r["amount"] or 0),
-                "description": r["description"]
-            }
-            for r in rows
-        ]
+        total_earn = 0.0
+        total_loss = 0.0
+        enriched   = []
 
-        return jsonify(txns), 200
+        for r in rows:
+            amt = float(r['amount'] or 0)
+            if r['type'] == 'credit':
+                total_earn += amt
+            else:
+                total_loss += amt
+
+            # Enrich contest & match from description
+            contest_name = ''
+            match_title  = ''
+            desc = r.get('description') or ''
+            if r['type']=='debit' and 'Joined contest ID' in desc:
+                try:
+                    cid = int(desc.split('Joined contest ID')[1].strip())
+                    cursor.execute("""
+                        SELECT c.contest_name, m.title AS match_title
+                        FROM contests c
+                        JOIN matches m ON c.match_id = m.id
+                        WHERE c.id = %s
+                    """, (cid,))
+                    cm = cursor.fetchone()
+                    if cm:
+                        contest_name = cm['contest_name'] or ''
+                        match_title  = cm['match_title']  or ''
+                except:
+                    pass
+
+            enriched.append({
+                'created_at':   r['created_at'].isoformat(),
+                'type':         r['type'],
+                'amount':       amt,
+                'description':  desc,
+                'contest_name': contest_name,
+                'match_title':  match_title
+            })
+
+        return jsonify({
+            'transactions': enriched,
+            'total_earn':   round(total_earn, 2),
+            'total_loss':   round(total_loss, 2)
+        }), 200
 
     except Exception as e:
-        # Print full Python stacktrace to your server logs
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
 
 @app.route('/test_env')
 def test_env():
