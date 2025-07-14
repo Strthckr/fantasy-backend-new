@@ -1452,6 +1452,7 @@ def wallet_topup(current_user_email):
     return jsonify({"message": f"Wallet topped up with ₹{amount} successfully."})
 
 
+
 @app.route('/admin/statistics', methods=['GET', 'OPTIONS'])
 @token_required
 def admin_statistics(current_user_email):
@@ -1475,10 +1476,10 @@ def admin_statistics(current_user_email):
         total_matches = cursor.fetchone()[0] or 0
 
         # Total contests & active contests
-        cursor.execute("SELECT COUNT(*), SUM(IF(status='active',1,0)) FROM contests")
+        cursor.execute("SELECT COUNT(*), SUM(status='active') FROM contests")
         total_contests, active_contests = cursor.fetchone()
-        total_contests    = total_contests or 0
-        active_contests   = active_contests or 0
+        total_contests  = total_contests or 0
+        active_contests = active_contests or 0
 
         # Prize distributed = sum of prize_pool
         cursor.execute("SELECT COALESCE(SUM(prize_pool),0) FROM contests")
@@ -1486,63 +1487,23 @@ def admin_statistics(current_user_email):
 
         # Commission earned = SUM(entry_fee * joined_users * commission_percentage/100)
         cursor.execute("""
-            SELECT 
-              COALESCE(SUM(entry_fee * joined_users * commission_percentage / 100),0) 
+            SELECT COALESCE(SUM(entry_fee * joined_users * commission_percentage/100),0)
             FROM contests
         """)
         total_commission_earned = float(cursor.fetchone()[0])
 
         return jsonify({
-            "total_users":                total_users,
-            "total_matches":              total_matches,
-            "total_contests":             total_contests,
-            "active_contests":            active_contests,
-            "total_prize_distributed":    round(total_prize_distributed, 2),
-            "total_commission_earned":    round(total_commission_earned, 2)
+            "total_users":               total_users,
+            "total_matches":             total_matches,
+            "total_contests":            total_contests,
+            "active_contests":           active_contests,
+            "total_prize_distributed":   round(total_prize_distributed, 2),
+            "total_commission_earned":   round(total_commission_earned, 2)
         }), 200
 
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
-
-@app.route('/admin/set_prize_distribution/<int:contest_id>', methods=['POST'])
-@token_required
-def set_prize_distribution(current_user_email, contest_id):
-    # Check if current user is an admin
-    if not is_admin_user(current_user_email):
-        return jsonify({"message": "Unauthorized"}), 403
-
-    data = request.get_json()
-    distributions = data.get("distributions")  # Expected to be a list of dicts
-
-    if not distributions or not isinstance(distributions, list):
-        return jsonify({"message": "Invalid input. Provide a list of distributions."}), 400
-
-    try:
-        cursor = db.cursor()
-
-        # Optionally delete previous distribution settings for this contest
-        cursor.execute("DELETE FROM prize_distributions WHERE contest_id = %s", (contest_id,))
-
-        # Insert new distribution values for the contest
-        for item in distributions:
-            rank = item.get("rank")
-            percentage = item.get("percentage")
-            if rank is None or percentage is None:
-                return jsonify({"message": "Each distribution item must include 'rank' and 'percentage'."}), 400
-
-            cursor.execute("""
-                INSERT INTO prize_distributions (contest_id, rank_position, percentage)
-                VALUES (%s, %s, %s)
-            """, (contest_id, rank, percentage))
-
-        db.commit()
-        return jsonify({"message": f"Prize distribution set for contest {contest_id} successfully."})
-
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
 
 @app.route('/admin/commission_report', methods=['GET'])
 @token_required
