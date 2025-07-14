@@ -2263,16 +2263,23 @@ def get_user_transactions(current_user_email, user_id):
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
             SELECT 
-                created_at, 
-                type, 
-                amount, 
-                description
-            FROM transactions
-            WHERE user_id = %s
-            ORDER BY created_at DESC
+              t.created_at,
+              t.type,
+              t.amount,
+              t.description,
+              ce.contest_id,
+              c.name    AS contest_name,
+              m.title   AS match_title
+            FROM transactions t
+            LEFT JOIN entries ce ON ce.transaction_id = t.id
+            LEFT JOIN contests c ON ce.contest_id = c.id
+            LEFT JOIN matches m  ON c.match_id     = m.id
+            WHERE t.user_id = %s
+            ORDER BY t.created_at DESC
         """, (user_id,))
         rows = cursor.fetchall()
         return jsonify(rows), 200
+
     except Exception as e:
         print("🔥 Error fetching transactions:", e)
         return jsonify({"error": str(e)}), 500
