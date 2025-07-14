@@ -2292,6 +2292,87 @@ def get_user_transactions(current_user_email, user_id):
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+    
+
+
+@app.route('/admin/commissions', methods=['GET', 'OPTIONS'])
+@token_required
+def commissions(current_user_email):
+    if request.method == 'OPTIONS':
+        return make_response('', 204)
+    if not is_admin_user(current_user_email):
+        return jsonify({'message':'Unauthorized'}), 403
+
+    try:
+        cur = db.cursor(dictionary=True)
+        cur.execute("""
+            SELECT
+              c.id            AS contest_id,
+              c.contest_name,
+              SUM(c.entry_fee * c.joined_users * c.commission_percentage / 100) AS commission
+            FROM contests c
+            GROUP BY c.id, c.contest_name
+            ORDER BY commission DESC
+        """)
+        rows = cur.fetchall()
+        out = [{
+          'contest_id':   r['contest_id'],
+          'contest_name': r['contest_name'],
+          'commission':   float(r['commission'] or 0)
+        } for r in rows]
+        return jsonify(out), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+
+@app.route('/admin/prize_distributions', methods=['GET','OPTIONS'])
+@token_required
+def prize_distributions(current_user_email):
+    if request.method == 'OPTIONS':
+        return make_response('',204)
+    if not is_admin_user(current_user_email):
+        return jsonify({'message':'Unauthorized'}),403
+
+    try:
+        cur = db.cursor(dictionary=True)
+        cur.execute("""
+          SELECT 
+            p.id,
+            p.user_id,
+            u.username,
+            p.contest_id,
+            c.contest_name,
+            p.amount,
+            p.distributed_at AS date
+          FROM prizes p
+          JOIN users    u ON p.user_id    = u.id
+          JOIN contests c ON p.contest_id = c.id
+          ORDER BY p.distributed_at DESC
+        """)
+        rows = cur.fetchall()
+        out = [{
+          'id':       r['id'],
+          'user_id':  r['user_id'],
+          'username': r['username'],
+          'contest_id':   r['contest_id'],
+          'contest_name': r['contest_name'],
+          'amount':   float(r['amount'] or 0),
+          'date':     r['date'].isoformat()
+        } for r in rows]
+        return jsonify(out), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error':str(e)}),500
+
+
+
+
 
 @app.route('/test_env')
 def test_env():
