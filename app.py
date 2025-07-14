@@ -2351,46 +2351,46 @@ def prize_distributions(current_user_email):
 
     try:
         cur = db.cursor(dictionary=True)
-
-        # Fetch prize-related credits
         cur.execute("""
-            SELECT 
+            SELECT
               t.id,
               t.user_id,
               u.username,
               t.amount,
               t.description,
-              t.created_at,
-              ce.contest_id,
+              t.created_at       AS date,
+              e.contest_id,
               c.contest_name,
               m.match_name
             FROM transactions t
-            JOIN users        u ON t.user_id = u.id
-            LEFT JOIN contest_entries ce ON t.user_id = ce.user_id
-            LEFT JOIN contests       c  ON ce.contest_id = c.id
-            LEFT JOIN matches        m  ON c.match_id    = m.id
-            WHERE t.type = 'credit' AND LOWER(t.description) LIKE '%prize%'
+            JOIN users   u ON t.user_id = u.id
+            LEFT JOIN entries e ON t.user_id = e.user_id
+            LEFT JOIN contests c ON e.contest_id = c.id
+            LEFT JOIN matches  m ON c.match_id   = m.id
+            WHERE t.type = 'credit'
+              AND LOWER(t.description) LIKE '%prize%'
             ORDER BY t.created_at DESC
         """)
-
         rows = cur.fetchall()
-        result = [{
-            'user_id':     r['user_id'],
-            'username':    r['username'],
-            'amount':      float(r['amount'] or 0),
-            'description': r['description'],
-            'date':        r['created_at'].isoformat(),
-            'contest_name':r['contest_name'] or '—',
-            'match_name':  r['match_name']   or '—'
-        } for r in rows]
+
+        result = []
+        for r in rows:
+            result.append({
+                'id':            r['id'],
+                'user_id':       r['user_id'],
+                'username':      r['username'] or '',
+                'amount':        float(r['amount'] or 0),
+                'description':   r['description'] or '',
+                'date':          r['date'].isoformat(),
+                'contest_name':  r['contest_name'] or '—',
+                'match_name':    r['match_name']   or '—'
+            })
 
         return jsonify(result), 200
 
     except Exception as e:
-        import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
-
 
 
 
