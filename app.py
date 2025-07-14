@@ -2340,14 +2340,14 @@ def commissions(current_user_email):
 
 
 
-@app.route('/admin/prize_distributions', methods=['GET', 'OPTIONS'])
+@app.route('/admin/prize_distributions', methods=['GET','OPTIONS'])
 @token_required
 def prize_distributions(current_user_email):
     if request.method == 'OPTIONS':
         return make_response('', 204)
 
     if not is_admin_user(current_user_email):
-        return jsonify({'message': 'Unauthorized'}), 403
+        return jsonify({'message':'Unauthorized'}), 403
 
     try:
         cur = db.cursor(dictionary=True)
@@ -2358,38 +2358,27 @@ def prize_distributions(current_user_email):
               u.username,
               t.amount,
               t.description,
-              t.created_at       AS date,
-              e.contest_id,
-              c.contest_name,
-              m.match_name
+              t.created_at AS date
             FROM transactions t
-            JOIN users   u ON t.user_id = u.id
-            LEFT JOIN entries e ON t.user_id = e.user_id
-            LEFT JOIN contests c ON e.contest_id = c.id
-            LEFT JOIN matches  m ON c.match_id   = m.id
+            JOIN users u ON t.user_id = u.id
             WHERE t.type = 'credit'
-              AND LOWER(t.description) LIKE '%prize%'
             ORDER BY t.created_at DESC
         """)
         rows = cur.fetchall()
 
-        result = []
-        for r in rows:
-            result.append({
-                'id':            r['id'],
-                'user_id':       r['user_id'],
-                'username':      r['username'] or '',
-                'amount':        float(r['amount'] or 0),
-                'description':   r['description'] or '',
-                'date':          r['date'].isoformat(),
-                'contest_name':  r['contest_name'] or '—',
-                'match_name':    r['match_name']   or '—'
-            })
+        result = [{
+            'id':          r['id'],
+            'user_id':     r['user_id'],
+            'username':    r['username'] or '',
+            'amount':      float(r['amount'] or 0),
+            'description': r['description'] or '',
+            'date':        r['date'].isoformat()
+        } for r in rows]
 
         return jsonify(result), 200
 
     except Exception as e:
-        traceback.print_exc()
+        import traceback; traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
