@@ -2340,46 +2340,56 @@ def commissions(current_user_email):
 
 
 
-@app.route('/admin/prize_distributions', methods=['GET','OPTIONS'])
+@app.route('/admin/prize_distributions', methods=['GET', 'OPTIONS'])
 @token_required
 def prize_distributions(current_user_email):
     if request.method == 'OPTIONS':
-        return make_response('',204)
+        return make_response('', 204)
+
     if not is_admin_user(current_user_email):
-        return jsonify({'message':'Unauthorized'}),403
+        return jsonify({'message': 'Unauthorized'}), 403
 
     try:
         cur = db.cursor(dictionary=True)
+
+        # Fetch prize-related credits
         cur.execute("""
-          SELECT 
-            p.id,
-            p.user_id,
-            u.username,
-            p.contest_id,
-            c.contest_name,
-            p.amount,
-            p.distributed_at AS date
-          FROM prizes p
-          JOIN users    u ON p.user_id    = u.id
-          JOIN contests c ON p.contest_id = c.id
-          ORDER BY p.distributed_at DESC
+            SELECT 
+              t.id,
+              t.user_id,
+              u.username,
+              t.amount,
+              t.description,
+              t.created_at,
+              ce.contest_id,
+              c.contest_name,
+              m.match_name
+            FROM transactions t
+            JOIN users        u ON t.user_id = u.id
+            LEFT JOIN contest_entries ce ON t.user_id = ce.user_id
+            LEFT JOIN contests       c  ON ce.contest_id = c.id
+            LEFT JOIN matches        m  ON c.match_id    = m.id
+            WHERE t.type = 'credit' AND LOWER(t.description) LIKE '%prize%'
+            ORDER BY t.created_at DESC
         """)
+
         rows = cur.fetchall()
-        out = [{
-          'id':       r['id'],
-          'user_id':  r['user_id'],
-          'username': r['username'],
-          'contest_id':   r['contest_id'],
-          'contest_name': r['contest_name'],
-          'amount':   float(r['amount'] or 0),
-          'date':     r['date'].isoformat()
+        result = [{
+            'user_id':     r['user_id'],
+            'username':    r['username'],
+            'amount':      float(r['amount'] or 0),
+            'description': r['description'],
+            'date':        r['created_at'].isoformat(),
+            'contest_name':r['contest_name'] or '—',
+            'match_name':  r['match_name']   or '—'
         } for r in rows]
-        return jsonify(out), 200
+
+        return jsonify(result), 200
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'error':str(e)}),500
+        return jsonify({'error': str(e)}), 500
 
 
 
