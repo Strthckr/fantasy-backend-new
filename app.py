@@ -2295,45 +2295,48 @@ def get_user_transactions(current_user_email, user_id):
     
 
 
-@app.route('/admin/commissions', methods=['GET','OPTIONS'])
+@app.route('/admin/commissions', methods=['GET', 'OPTIONS'])
 @token_required
 def commissions(current_user_email):
     if request.method == 'OPTIONS':
-        return make_response('',204)
+        return make_response('', 204)
+
     if not is_admin_user(current_user_email):
-        return jsonify({'message':'Unauthorized'}),403
+        return jsonify({'message': 'Unauthorized'}), 403
 
     try:
         cur = db.cursor(dictionary=True)
         cur.execute("""
-          SELECT
-            c.id                AS contest_id,
-            c.contest_name,
-            c.entry_fee,
-            c.joined_users,
-            c.commission_percentage,
-            m.title             AS match_title,
-            (c.entry_fee * c.joined_users * c.commission_percentage / 100) AS commission
-          FROM contests c
-          JOIN matches m ON c.match_id = m.id
-          ORDER BY commission DESC
+            SELECT
+                c.id                    AS contest_id,
+                c.contest_name,
+                c.entry_fee,
+                c.joined_users,
+                c.commission_percentage,
+                m.match_name            AS match_name,
+                (c.entry_fee * c.joined_users * c.commission_percentage / 100) AS commission
+            FROM contests c
+            JOIN matches m ON c.match_id = m.id
+            ORDER BY commission DESC
         """)
         rows = cur.fetchall()
-        out = [{
-          'contest_id':           r['contest_id'],
-          'contest_name':         r['contest_name'],
-          'entry_fee':            float(r['entry_fee'] or 0),
-          'joined_users':         int(r['joined_users'] or 0),
-          'commission_percentage':float(r['commission_percentage'] or 0),
-          'match_title':          r['match_title'],
-          'commission':           round(float(r['commission'] or 0), 2)
+
+        result = [{
+            'contest_id':             r['contest_id'],
+            'contest_name':           r['contest_name'],
+            'entry_fee':              float(r['entry_fee'] or 0),
+            'joined_users':           int(r['joined_users'] or 0),
+            'commission_percentage':  float(r['commission_percentage'] or 0),
+            'match_name':             r['match_name'],
+            'commission':             round(float(r['commission'] or 0), 2)
         } for r in rows]
-        return jsonify(out), 200
+
+        return jsonify(result), 200
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'error':str(e)}),500
+        return jsonify({'error': str(e)}), 500
 
 
 
