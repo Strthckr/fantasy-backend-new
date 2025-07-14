@@ -9,6 +9,7 @@ from decimal import Decimal
 from dotenv import load_dotenv
 import os
 import bcrypt
+import traceback
 
 # Load environment variables from .env file
 load_dotenv()
@@ -2263,48 +2264,35 @@ def get_user_transactions(current_user_email, user_id):
 
     try:
         cursor = db.cursor(dictionary=True)
-
         cursor.execute("""
             SELECT 
-              t.created_at,
-              t.type,
-              CAST(t.amount AS DECIMAL(10,2)) AS amount,
-              t.description,
-              -- most recent contest joined on or before this transaction
-              (
-                SELECT c.contest_name
-                FROM entries e
-                JOIN contests c ON e.contest_id = c.id
-                WHERE e.user_id = %s
-                  AND e.joined_at <= t.created_at
-                ORDER BY e.joined_at DESC
-                LIMIT 1
-              ) AS contest_name,
-              -- same for match title
-              (
-                SELECT m.title
-                FROM entries e
-                JOIN contests c ON e.contest_id = c.id
-                JOIN matches m ON c.match_id = m.id
-                WHERE e.user_id = %s
-                  AND e.joined_at <= t.created_at
-                ORDER BY e.joined_at DESC
-                LIMIT 1
-              ) AS match_title
-            FROM transactions t
-            WHERE t.user_id = %s
-            ORDER BY t.created_at DESC
-        """, (user_id, user_id, user_id))
+                created_at,
+                type,
+                amount,
+                description
+            FROM transactions
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+        """, (user_id,))
+        rows = cursor.fetchall()
 
-        txns = cursor.fetchall()
+        # Convert to JSON-friendly types
+        txns = [
+            {
+                "created_at":  r["created_at"].isoformat(),
+                "type":        r["type"],
+                "amount":      float(r["amount"] or 0),
+                "description": r["description"]
+            }
+            for r in rows
+        ]
+
         return jsonify(txns), 200
 
     except Exception as e:
-        # print full traceback to your logs
-        import traceback
+        # Print full Python stacktrace to your server logs
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
+        return jsonify({"error": str(e)}), 
 
 
 
