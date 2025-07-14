@@ -2258,11 +2258,11 @@ def ban_user(current_user_email):
 @app.route('/admin/user_transactions/<int:user_id>', methods=['GET','OPTIONS'])
 @token_required
 def get_user_transactions(current_user_email, user_id):
-    # 1) Preflight
+    # 1) Allow preflight through
     if request.method == 'OPTIONS':
         return make_response('', 204)
 
-    # 2) Admin check
+    # 2) Only admins
     if not is_admin_user(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
@@ -2287,39 +2287,52 @@ def get_user_transactions(current_user_email, user_id):
             else:
                 total_loss += amt
 
-            # Enrich contest & match from description
+            # default blanks
             contest_name = ''
             match_title  = ''
+
+            # only for entry-fee debits that say "Joined contest ID X"
             desc = r.get('description') or ''
-            if r['type']=='debit' and 'Joined contest ID' in desc:
+            if r['type'] == 'debit' and 'Joined contest ID' in desc:
                 try:
                     cid = int(desc.split('Joined contest ID')[1].strip())
+
+                    # fetch contest_name & its match_id
                     cursor.execute("""
-                        SELECT c.contest_name, m.title AS match_title
-                        FROM contests c
-                        JOIN matches m ON c.match_id = m.id
-                        WHERE c.id = %s
+                        SELECT contest_name, match_id
+                        FROM contests
+                        WHERE id = %s
                     """, (cid,))
                     cm = cursor.fetchone()
                     if cm:
                         contest_name = cm['contest_name'] or ''
-                        match_title  = cm['match_title']  or ''
-                except:
-                    pass
+                        mid = cm['match_id']
+                        if mid:
+                            # fetch the real match_name
+                            cursor.execute("""
+                                SELECT match_name
+                                FROM matches
+                                WHERE id = %s
+                            """, (mid,))
+                            mm = cursor.fetchone()
+                            if mm:
+                                match_title = mm['match_name'] or ''
+                except Exception:
+                    pass   # on any parse/join error just leave blanks
 
             enriched.append({
-                'created_at':   r['created_at'].isoformat(),
-                'type':         r['type'],
-                'amount':       amt,
-                'description':  desc,
-                'contest_name': contest_name,
-                'match_title':  match_title
+                "created_at":   r['created_at'].isoformat(),
+                "type":         r['type'],
+                "amount":       amt,
+                "description":  desc,
+                "contest_name": contest_name,
+                "match_title":  match_title
             })
 
         return jsonify({
-            'transactions': enriched,
-            'total_earn':   round(total_earn, 2),
-            'total_loss':   round(total_loss, 2)
+            "transactions": enriched,
+            "total_earn":   round(total_earn, 2),
+            "total_loss":   round(total_loss, 2)
         }), 200
 
     except Exception as e:
