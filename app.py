@@ -2253,6 +2253,34 @@ def ban_user(current_user_email):
 
 
 
+@app.route('/admin/user_transactions/<int:user_id>', methods=['GET'])
+@token_required
+def get_user_transactions(current_user_email, user_id):
+    if not is_admin_user(current_user_email):
+        return jsonify({"message": "Unauthorized"}), 403
+
+    try:
+        cursor = db.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT 
+              created_at, 
+              type, 
+              amount, 
+              description 
+            FROM transactions 
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+        """, (user_id,))
+        rows = cursor.fetchall()
+        return jsonify(rows), 200
+    except Exception as e:
+        print("🔥 Error fetching transactions:", e)
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+
 
 @app.route('/test_env')
 def test_env():
