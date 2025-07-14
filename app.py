@@ -2017,9 +2017,17 @@ def get_admin_users(current_user_email):
 
     try:
         cursor = db.cursor(dictionary=True)
+        
+        # 1) Fetch user details and wallet summary
         cursor.execute("""
             SELECT 
-                u.id, u.username, u.email, u.is_admin, u.is_banned, w.balance,
+                u.id,
+                u.username,
+                u.email,
+                u.is_admin,
+                u.is_banned,
+                u.registered_at,
+                COALESCE(w.balance, 0) AS balance,
                 IFNULL((SELECT SUM(amount) FROM transactions 
                         WHERE user_id = u.id AND type = 'credit'), 0) AS total_earning,
                 IFNULL((SELECT SUM(amount) FROM transactions 
@@ -2029,22 +2037,54 @@ def get_admin_users(current_user_email):
             FROM users u
             LEFT JOIN wallets w ON u.id = w.user_id
         """)
+        
         users = cursor.fetchall()
 
+        # 2) Build each user's 7-day credit/debit net trend
+        for u in users:
+            cursor.execute("""
+                SELECT 
+                    DATE(created_at) AS day,
+                    SUM(
+                        CASE 
+                            WHEN type = 'credit' THEN amount
+                            ELSE -amount
+                        END
+                    ) AS net
+                FROM transactions
+                WHERE user_id = %s
+                  AND created_at >= NOW() - INTERVAL 7 DAY
+                GROUP BY day
+                ORDER BY day ASC
+            """, (u["id"],))
+            trend = cursor.fetchall()
+            u["daily_trend"] = [
+                {
+                    "day": row["day"].strftime("%a"),
+                    "net": float(row["net"] or 0)
+                }
+                for row in trend
+            ]
+
+        # 3) Prepare JSON response for frontend
         return jsonify([
             {
-                "user_id": u["id"],
-                "name": u["username"],
-                "email": u["email"],
-                "wallet": float(u["balance"] or 0),
-                "is_admin": bool(u["is_admin"]),
-                "is_banned": bool(u["is_banned"]),
-                "total_earning": float(u["total_earning"]),
-                "total_loss": float(u["total_loss"]),
-                "contest_count": int(u["contest_count"]),
-                "last_contest_date": u["last_contest_date"]
-            } for u in users
+                "user_id":         u["id"],
+                "name":            u["username"],
+                "email":           u["email"],
+                "wallet":          float(u["balance"]),
+                "is_admin":        bool(u["is_admin"]),
+                "is_banned":       bool(u["is_banned"]),
+                "total_earning":   float(u["total_earning"]),
+                "total_loss":      float(u["total_loss"]),
+                "contest_count":   int(u["contest_count"]),
+                "last_contest_date": u["last_contest_date"],
+                "registered_at":   u["registered_at"],
+                "daily_trend":     u["daily_trend"]
+            }
+            for u in users
         ])
+
     except Exception as err:
         print("🔥 DB error:", err)
         return jsonify({"error": str(err)}), 500
