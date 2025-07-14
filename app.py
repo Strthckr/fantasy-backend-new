@@ -1452,65 +1452,58 @@ def wallet_topup(current_user_email):
     return jsonify({"message": f"Wallet topped up with ₹{amount} successfully."})
 
 
-@app.route('/admin/statistics', methods=['GET'])
+@app.route('/admin/statistics', methods=['GET', 'OPTIONS'])
 @token_required
 def admin_statistics(current_user_email):
+    # 1) CORS preflight
+    if request.method == 'OPTIONS':
+        return make_response('', 204)
+
+    # 2) Only admins
     if not is_admin_user(current_user_email):
-        return jsonify({"message": "Unauthorized access"}), 403
+        return jsonify({"message": "Unauthorized"}), 403
 
     try:
-        cursor = db.cursor(dictionary=True)
+        cursor = db.cursor()
 
-        # 1. Total users
-        cursor.execute("SELECT COUNT(*) AS total_users FROM users")
-        total_users = cursor.fetchone()['total_users']
+        # Total users
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = cursor.fetchone()[0] or 0
 
-        # 2. Total matches
-        cursor.execute("SELECT COUNT(*) AS total_matches FROM matches")
-        total_matches = cursor.fetchone()['total_matches']
+        # Total matches
+        cursor.execute("SELECT COUNT(*) FROM matches")
+        total_matches = cursor.fetchone()[0] or 0
 
-        # 3. Total contests
-        cursor.execute("SELECT COUNT(*) AS total_contests FROM contests")
-        total_contests = cursor.fetchone()['total_contests']
+        # Total contests & active contests
+        cursor.execute("SELECT COUNT(*), SUM(IF(status='active',1,0)) FROM contests")
+        total_contests, active_contests = cursor.fetchone()
+        total_contests    = total_contests or 0
+        active_contests   = active_contests or 0
 
-        # 4. Active contests
-        cursor.execute("SELECT COUNT(*) AS active_contests FROM contests WHERE status = 'active'")
-        active_contests = cursor.fetchone()['active_contests']
+        # Prize distributed = sum of prize_pool
+        cursor.execute("SELECT COALESCE(SUM(prize_pool),0) FROM contests")
+        total_prize_distributed = float(cursor.fetchone()[0])
 
-        # 5. Total prize distributed (only for 'credit' transactions labeled as Prize)
+        # Commission earned = SUM(entry_fee * joined_users * commission_percentage/100)
         cursor.execute("""
-            SELECT SUM(amount) AS total_prize_distributed 
-            FROM transaction_history 
-            WHERE transaction_type = 'credit' AND description LIKE 'Prize%'
+            SELECT 
+              COALESCE(SUM(entry_fee * joined_users * commission_percentage / 100),0) 
+            FROM contests
         """)
-        prize_result = cursor.fetchone()
-        total_prize_distributed = float(prize_result['total_prize_distributed'] or 0)
-
-        # 6. Total withdrawal requests
-        cursor.execute("SELECT COUNT(*) AS total_withdraw_requests FROM withdrawal_requests")
-        total_withdraw_requests = cursor.fetchone()['total_withdraw_requests']
-
-        # 7. Total commission earned (from platform_earnings table)
-        cursor.execute("""
-            SELECT SUM(CAST(commission_amount AS DECIMAL(10,2))) AS total_commission 
-            FROM platform_earnings
-        """)
-        commission_result = cursor.fetchone()
-        total_commission_earned = float(commission_result['total_commission'] or 0)
+        total_commission_earned = float(cursor.fetchone()[0])
 
         return jsonify({
-            "total_users": total_users,
-            "total_matches": total_matches,
-            "total_contests": total_contests,
-            "active_contests": active_contests,
-            "total_prize_distributed": total_prize_distributed,
-            "total_withdraw_requests": total_withdraw_requests,
-            "total_commission_earned": total_commission_earned
-        })
+            "total_users":                total_users,
+            "total_matches":              total_matches,
+            "total_contests":             total_contests,
+            "active_contests":            active_contests,
+            "total_prize_distributed":    round(total_prize_distributed, 2),
+            "total_commission_earned":    round(total_commission_earned, 2)
+        }), 200
 
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/admin/set_prize_distribution/<int:contest_id>', methods=['POST'])
