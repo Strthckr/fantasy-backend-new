@@ -2263,11 +2263,11 @@ def get_user_transactions(current_user_email, user_id):
         cursor = db.cursor(dictionary=True)
         cursor.execute("""
             SELECT 
-              created_at, 
-              type, 
-              amount, 
-              description 
-            FROM transactions 
+                created_at, 
+                type, 
+                amount, 
+                description
+            FROM transactions
             WHERE user_id = %s
             ORDER BY created_at DESC
         """, (user_id,))
