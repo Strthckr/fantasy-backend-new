@@ -1,37 +1,44 @@
-# app.py
-
 from datetime import datetime, timedelta
 from flask_cors import CORS
 import jwt
 from functools import wraps
 from flask import Flask, request, jsonify, make_response
 import mysql.connector
-import os, json, traceback, bcrypt
+import json
 from decimal import Decimal
 from dotenv import load_dotenv
+import os
+import bcrypt
+import traceback
 
-# 1) Load .env
+# Load environment variables from .env file
 load_dotenv()
 
-# 2) Create Flask once and configure it
+# ✅ Print to check if variables are loaded
+print("✅ DB_HOST:", os.getenv("DB_HOST"))
+print("✅ DB_USER:", os.getenv("DB_USER"))
+print("✅ DB_PASSWORD:", os.getenv("DB_PASSWORD"))
+print("✅ DB_NAME:", os.getenv("DB_NAME"))
+print("✅ SECRET_KEY:", os.getenv("SECRET_KEY"))
+
+
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret')
+app = Flask(__name__)
+CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')  # Use env secret or fallback
+print("✅ SECRET_KEY loaded:", app.config['SECRET_KEY'])
 
-# 3) Enable CORS for ALL routes from your React origin
-CORS(
-  app,
-  resources={r"/*": {"origins": "http://localhost:3000"}},
-  supports_credentials=True
-)
 
-# 4) Open DB connection
+# MySQL Database Connection using env vars
 db = mysql.connector.connect(
     host=os.getenv('DB_HOST'),
     port=int(os.getenv('DB_PORT', 3306)),
     user=os.getenv('DB_USER'),
     password=os.getenv('DB_PASSWORD'),
-    database=os.getenv('DB_NAME'),
+    database=os.getenv('DB_NAME')
 )
+
+
 
 
 cursor = db.cursor()
@@ -39,26 +46,33 @@ cursor = db.cursor()
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        # 1) Let the preflight OPTIONS through un-checked
+        # 1) Allow CORS preflight to pass un-checked
         if request.method == 'OPTIONS':
-            return make_response('', 204)
+            resp = make_response('', 204)
+            # These headers get added by flask-cors, but we re-declare to be safe
+            resp.headers['Access-Control-Allow-Origin']  = 'http://localhost:3000'
+            resp.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
+            resp.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+            return resp
 
         # 2) Now enforce JWT
-        auth = request.headers.get('Authorization', '')
-        if not auth.startswith('Bearer '):
+        token = None
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]
+
+        if not token:
             return jsonify({'message': 'Token is missing!'}), 403
 
-        token = auth.split(' ', 1)[1]
         try:
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
             current_user_email = data['email']
         except jwt.ExpiredSignatureError:
-            return jsonify({'message': 'Token expired'}), 401
+            return jsonify({'message': 'Token has expired! Please login again.'}), 401
         except jwt.InvalidTokenError:
-            return jsonify({'message': 'Invalid token'}), 401
+            return jsonify({'message': 'Invalid token!'}), 401
 
         return f(current_user_email, *args, **kwargs)
-
     return decorated
 
 
@@ -2278,8 +2292,6 @@ def get_user_transactions(current_user_email, user_id):
         # Print full Python stacktrace to your server logs
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
-
 
 
 @app.route('/test_env')
