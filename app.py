@@ -2254,7 +2254,6 @@ def ban_user(current_user_email):
 
 
 
-# app.py (or wherever you define routes)
 
 @app.route('/admin/user_transactions/<int:user_id>', methods=['GET'])
 @token_required
@@ -2292,7 +2291,8 @@ def get_user_transactions(current_user_email, user_id):
     except Exception as e:
         # Print full Python stacktrace to your server logs
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 
+        return jsonify({"error": str(e)}), 500
+
 
 
 
