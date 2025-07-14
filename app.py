@@ -2253,6 +2253,8 @@ def ban_user(current_user_email):
 
 
 
+# app.py (or wherever you define routes)
+
 @app.route('/admin/user_transactions/<int:user_id>', methods=['GET'])
 @token_required
 def get_user_transactions(current_user_email, user_id):
@@ -2262,61 +2264,46 @@ def get_user_transactions(current_user_email, user_id):
     try:
         cursor = db.cursor(dictionary=True)
 
-        # Fetch all transactions
         cursor.execute("""
             SELECT 
-                id,
-                created_at,
-                type,
-                amount,
-                description
-            FROM transactions
-            WHERE user_id = %s
-            ORDER BY created_at DESC
-        """, (user_id,))
-        transactions = cursor.fetchall()
+              t.created_at,
+              t.type,
+              CAST(t.amount AS DECIMAL(10,2)) AS amount,
+              t.description,
+              -- most recent contest joined on or before this transaction
+              (
+                SELECT c.contest_name
+                FROM entries e
+                JOIN contests c ON e.contest_id = c.id
+                WHERE e.user_id = %s
+                  AND e.joined_at <= t.created_at
+                ORDER BY e.joined_at DESC
+                LIMIT 1
+              ) AS contest_name,
+              -- same for match title
+              (
+                SELECT m.title
+                FROM entries e
+                JOIN contests c ON e.contest_id = c.id
+                JOIN matches m ON c.match_id = m.id
+                WHERE e.user_id = %s
+                  AND e.joined_at <= t.created_at
+                ORDER BY e.joined_at DESC
+                LIMIT 1
+              ) AS match_title
+            FROM transactions t
+            WHERE t.user_id = %s
+            ORDER BY t.created_at DESC
+        """, (user_id, user_id, user_id))
 
-        enriched = []
-        for t in transactions:
-            contest_name = None
-            match_title  = None
-
-            if t["type"] == "debit" and "Joined contest" in (t["description"] or ""):
-                cursor.execute("""
-                    SELECT 
-                        c.contest_name,
-                        m.title AS match_title
-                    FROM entries e
-                    JOIN contests c ON e.contest_id = c.id
-                    JOIN matches m  ON c.match_id = m.id
-                    WHERE e.user_id = %s
-                      AND e.joined_at <= %s
-                    ORDER BY e.joined_at DESC
-                    LIMIT 1
-                """, (user_id, t["created_at"]))
-                row = cursor.fetchone()
-                if row:
-                    contest_name = row["contest_name"]
-                    match_title  = row["match_title"]
-
-            enriched.append({
-                "created_at":    t["created_at"],
-                "type":          t["type"],
-                "amount":        float(t["amount"] or 0),
-                "description":   t["description"],
-                "contest_name":  contest_name,
-                "match_title":   match_title
-            })
-
-        return jsonify(enriched), 200
+        txns = cursor.fetchall()
+        return jsonify(txns), 200
 
     except Exception as e:
-        print("🔥 Error fetching transactions:", e)
+        # print full traceback to your logs
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
-
 
 
 
