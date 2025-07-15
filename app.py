@@ -2386,139 +2386,129 @@ import mysql.connector
 @token_required
 def user_dashboard(current_user_email):
     try:
-        # parse range in days
+        # parse range (days) query param
         days = int(request.args.get('range', 7))
         since = datetime.utcnow() - timedelta(days=days)
 
+        # dict cursor
         cur = db.cursor(dictionary=True)
 
-        # fetch user_id
+        # 1) Get user_id
         cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
         user = cur.fetchone()
         if not user:
             return jsonify({"message":"User not found"}), 404
         uid = user['id']
 
-        # wallet balance
+        # 2) Wallet balance
         cur.execute("SELECT balance FROM wallets WHERE user_id=%s", (uid,))
         row = cur.fetchone()
-        wallet_balance = float(row['balance'] or 0) if row else 0
+        wallet = float(row['balance'] or 0) if row else 0
 
-        # earnings & spend
+        # 3) Earnings & spend & net in range
         cur.execute("""
-          SELECT
+          SELECT 
             SUM(CASE WHEN t.type='credit' THEN t.amount ELSE 0 END) AS earnings,
             SUM(CASE WHEN t.type='debit'  THEN t.amount ELSE 0 END) AS spend
           FROM transactions t
           WHERE t.user_id=%s AND t.created_at >= %s
         """, (uid, since))
-        stats = cur.fetchone() or {}
-        total_earnings = float(stats.get('earnings') or 0)
-        total_spend    = float(stats.get('spend')    or 0)
+        stats = cur.fetchone()
+        total_earnings = float(stats['earnings'] or 0)
+        total_spend    = float(stats['spend']    or 0)
         net_balance    = total_earnings - total_spend
 
-        # daily net history
+        # 4) Daily net history
         cur.execute("""
-          SELECT
-            DATE(created_at) AS day,
-            SUM(CASE WHEN type='credit' THEN amount ELSE -amount END) AS net
-          FROM transactions
-          WHERE user_id=%s AND created_at >= %s
+          SELECT 
+            DATE(t.created_at)        AS day,
+            SUM(
+              CASE WHEN t.type='credit' THEN t.amount 
+                   ELSE -t.amount END
+            ) AS net
+          FROM transactions t
+          WHERE t.user_id=%s AND t.created_at >= %s
           GROUP BY day
           ORDER BY day
         """, (uid, since))
         dailyNetHistory = [
-          { "day":    r["day"].isoformat(),
-            "net":    float(r["net"]) }
+          {"day": r["day"].isoformat(), "net": float(r["net"])} 
           for r in cur.fetchall()
         ]
 
-        # upcoming matches + contests WITH joined_count & team_limit
+        # 5) Active contests (upcoming or live)
+        cur.execute("""
+          SELECT 
+            uc.id          AS entry_id,
+            c.id           AS contest_id,
+            c.contest_name,
+            c.prize_pool
+          FROM user_contests uc
+          JOIN contests c ON uc.contest_id = c.id
+          JOIN matches m ON c.match_id    = m.id
+          WHERE uc.user_id=%s 
+            AND UPPER(m.status) IN ('UPCOMING','LIVE')
+        """, (uid,))
+        activeContests = [
+          {
+            "entry_id":      r["entry_id"],
+            "contest_id":    r["contest_id"],
+            "contest_name":  r["contest_name"],
+            "prize_pool":    float(r["prize_pool"])
+          }
+          for r in cur.fetchall()
+        ]
+
+        # 6) Upcoming matches + contests
         cur.execute("""
           SELECT
-            m.id              AS match_id,
+            m.id               AS match_id,
             m.match_name,
             m.start_time,
-            c.id              AS contest_id,
+            c.id               AS contest_id,
             c.contest_name,
-            c.prize_pool,
-            COUNT(uc.id)      AS joined_count,
-            c.team_limit
+            c.prize_pool
           FROM matches m
-          JOIN contests c
-            ON c.match_id = m.id
-          LEFT JOIN user_contests uc
-            ON uc.contest_id = c.id
+          JOIN contests c ON c.match_id = m.id
           WHERE UPPER(m.status) = 'UPCOMING'
-          GROUP BY m.id, c.id
           ORDER BY m.start_time, c.prize_pool DESC
         """)
         rows = cur.fetchall()
-
-        # group contests under each match
         matches = {}
         for r in rows:
             mid = r["match_id"]
             if mid not in matches:
                 matches[mid] = {
-                  "id":         mid,
+                  "id": mid,
                   "match_name": r["match_name"],
                   "start_time": r["start_time"].isoformat(),
-                  "contests":   []
+                  "contests": []
                 }
             matches[mid]["contests"].append({
                 "contest_id":   r["contest_id"],
                 "contest_name": r["contest_name"],
-                "prize_pool":   float(r["prize_pool"]),
-                "joined_count": int(r["joined_count"]),
-                "team_limit":   int(r["team_limit"])
+                "prize_pool":   float(r["prize_pool"])
             })
 
-        # active contests (optional: include same counts if you like)
-        cur.execute("""
-          SELECT
-            c.id        AS contest_id,
-            c.contest_name,
-            c.prize_pool,
-            COUNT(uc.id) AS joined_count,
-            c.team_limit
-          FROM user_contests uc
-          JOIN contests c
-            ON c.id = uc.contest_id
-          JOIN matches m
-            ON m.id = c.match_id
-          WHERE uc.user_id=%s AND UPPER(m.status) IN ('LIVE','UPCOMING')
-          GROUP BY c.id
-        """, (uid,))
-        activeContests = [
-          {
-            "contest_id":   r["contest_id"],
-            "contest_name": r["contest_name"],
-            "prize_pool":   float(r["prize_pool"]),
-            "joined_count": int(r["joined_count"]),
-            "team_limit":   int(r["team_limit"])
-          }
-          for r in cur.fetchall()
-        ]
-
         return jsonify({
-            "wallet_balance":  wallet_balance,
+            "wallet_balance":  wallet,
             "total_earnings":  total_earnings,
             "total_spend":     total_spend,
             "net_balance":     net_balance,
             "dailyNetHistory": dailyNetHistory,
+            "activeContests":  list(activeContests),
             "upcomingMatches": list(matches.values()),
-            "activeContests":  activeContests,
             "user_email":      current_user_email
         }), 200
 
     except mysql.connector.Error as err:
-        app.logger.error(err)
-        return jsonify({"message":"DB error", "error":str(err)}), 500
+        app.logger.error("DB error: %s", err)
+        return jsonify({"message":"Database error","error":str(err)}), 500
 
     except Exception as e:
-        app.logger.exception(e)
-        return jsonify({"message":"Server error","error":str(e)}), 500
+        app.logger.exception("Server error")
+        return jsonify({"message":"Internal server error","error":str(e)}), 500
+
 @app.route('/user/generate-teams', methods=['POST'])
 @token_required
 def generate_teams(current_user_email):
