@@ -2384,34 +2384,34 @@ def user_dashboard(current_user_email):
     try:
         cur = db.cursor(dictionary=True)
 
-        # Wallet balance
-        cur.execute(
-            "SELECT wallet_balance FROM users WHERE email=%s",
-            (current_user_email,)
-        )
+        # 1) Wallet balance from wallets.balance
+        cur.execute("""
+            SELECT w.balance
+            FROM wallets w
+            JOIN users u ON u.id = w.user_id
+            WHERE u.email = %s
+        """, (current_user_email,))
         row = cur.fetchone()
-        if not row:
-            return jsonify({"message":"User not found"}), 404
-        wallet = float(row['wallet_balance'] or 0)
+        wallet = float(row['balance'] or 0) if row else 0.0
 
-        # Upcoming matches + contests
+        # 2) Upcoming matches + contests (unchanged)
         cur.execute("""
             SELECT
-              m.id           AS match_id,
+              m.id               AS match_id,
               m.match_name,
               m.start_time,
-              c.id           AS contest_id,
+              c.id               AS contest_id,
               c.contest_name,
               c.prize_pool,
               c.max_teams_per_user AS team_limit
             FROM matches m
             JOIN contests c ON c.match_id = m.id
-            WHERE UPPER(m.status)='UPCOMING'
+            WHERE UPPER(m.status) = 'UPCOMING'
             ORDER BY m.start_time, c.prize_pool DESC
         """)
         rows = cur.fetchall()
 
-        # Group by match
+        # 3) Group by match
         matches = {}
         for r in rows:
             mid = r['match_id']
