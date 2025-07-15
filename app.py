@@ -33,27 +33,22 @@ db = mysql.connector.connect(
 )
 
 # 4) JWT decorator
+
 def token_required(f):
     @wraps(f)
     def wrapped(*args, **kwargs):
-        # Allow preflight
-        if request.method == "OPTIONS":
-            return make_response("", 204)
-
-        auth = request.headers.get("Authorization", "")
+        auth = request.headers.get("Authorization","")
         if not auth.startswith("Bearer "):
-            return jsonify({"message": "Token is missing"}), 401
-
+            return jsonify({"message":"Token is missing"}), 401
         token = auth.split(" ",1)[1]
         try:
-            payload = jwt.decode(token, app.config["SECRET_KEY"], algorithms=["HS256"])
-            current_user_email = payload["email"]
+            payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            email = payload['email']
         except jwt.ExpiredSignatureError:
-            return jsonify({"message": "Token expired"}), 401
+            return jsonify({"message":"Token expired"}), 401
         except jwt.InvalidTokenError:
-            return jsonify({"message": "Invalid token"}), 401
-
-        return f(current_user_email, *args, **kwargs)
+            return jsonify({"message":"Invalid token"}), 401
+        return f(email, *args, **kwargs)
     return wrapped
 
 # 5) Admin check (example)
@@ -2344,56 +2339,66 @@ def prize_distributions(current_user_email):
 @token_required
 def user_dashboard(current_user_email):
     try:
-        # 2a. Get wallet
-        cur = db.cursor()
-        cur.execute("SELECT wallet_balance FROM users WHERE email=%s", (current_user_email,))
-        wallet = cur.fetchone()[0] or 0
-
-        # 2b. Get upcoming matches + their contests
         cur = db.cursor(dictionary=True)
+
+        # Wallet balance
+        cur.execute(
+            "SELECT wallet_balance FROM users WHERE email=%s",
+            (current_user_email,)
+        )
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"message":"User not found"}), 404
+        wallet = float(row['wallet_balance'] or 0)
+
+        # Upcoming matches + contests
         cur.execute("""
-          SELECT
-            m.id, m.match_name, m.start_time,
-            c.id            AS contest_id,
-            c.contest_name,
-            c.prize_pool,
-            c.max_teams_per_user AS team_limit
-          FROM matches m
-          JOIN contests c ON c.match_id = m.id
-          WHERE m.status = 'UPCOMING'
-          ORDER BY m.start_time, c.prize_pool DESC
+            SELECT
+              m.id           AS match_id,
+              m.match_name,
+              m.start_time,
+              c.id           AS contest_id,
+              c.contest_name,
+              c.prize_pool,
+              c.max_teams_per_user AS team_limit
+            FROM matches m
+            JOIN contests c ON c.match_id = m.id
+            WHERE UPPER(m.status)='UPCOMING'
+            ORDER BY m.start_time, c.prize_pool DESC
         """)
         rows = cur.fetchall()
 
-        # Group contests by match
+        # Group by match
         matches = {}
         for r in rows:
-          mid = r['id']
-          matches.setdefault(mid, {
-            id: mid,
-            match_name: r['match_name'],
-            start_time: r['start_time'].isoformat(),
-            contests: []
-          })
-          matches[mid]['contests'].append({
-            contest_id:    r['contest_id'],
-            contest_name:  r['contest_name'],
-            prize_pool:    float(r['prize_pool']),
-            team_limit:    r['team_limit']
-          })
+            mid = r['match_id']
+            if mid not in matches:
+                matches[mid] = {
+                    "id": mid,
+                    "match_name": r['match_name'],
+                    "start_time": r['start_time'].isoformat(),
+                    "contests": []
+                }
+            matches[mid]["contests"].append({
+                "contest_id":   r['contest_id'],
+                "contest_name": r['contest_name'],
+                "prize_pool":   float(r['prize_pool']),
+                "team_limit":   r['team_limit']
+            })
 
-        payload = {
-          "wallet_balance": float(wallet),
-          "user_email":     current_user_email,
-          "upcomingMatches": list(matches.values())
-        }
-        return jsonify(payload), 200
+        return jsonify({
+            "wallet_balance":  wallet,
+            "user_email":      current_user_email,
+            "upcomingMatches": list(matches.values())
+        }), 200
+
+    except mysql.connector.Error as err:
+        app.logger.error("DB error on /user/dashboard: %s", err)
+        return jsonify({"message":"Database error","error":str(err)}), 500
 
     except Exception as e:
-        app.logger.exception(e)
-        return jsonify({"message":"Failed to load dashboard"}), 500
-
-
+        app.logger.exception("Server error on /user/dashboard")
+        return jsonify({"message":"Internal server error","error":str(e)}), 500
 
 @app.route('/user/generate-teams', methods=['POST'])
 @token_required
