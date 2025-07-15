@@ -2459,7 +2459,7 @@ def user_dashboard(current_user_email):
           for r in cur.fetchall()
         ]
 
-        # ✅ 6) Upcoming matches + contests (with joined count and team limit)
+        # 6) Upcoming matches + contests
         cur.execute("""
           SELECT
             m.id               AS match_id,
@@ -2467,9 +2467,7 @@ def user_dashboard(current_user_email):
             m.start_time,
             c.id               AS contest_id,
             c.contest_name,
-            c.prize_pool,
-            c.team_limit,
-            (SELECT COUNT(*) FROM user_contests uc WHERE uc.contest_id = c.id) AS joined_count
+            c.prize_pool
           FROM matches m
           JOIN contests c ON c.match_id = m.id
           WHERE UPPER(m.status) = 'UPCOMING'
@@ -2489,12 +2487,9 @@ def user_dashboard(current_user_email):
             matches[mid]["contests"].append({
                 "contest_id":   r["contest_id"],
                 "contest_name": r["contest_name"],
-                "prize_pool":   float(r["prize_pool"]),
-                "joined_count": int(r["joined_count"] or 0),
-                "team_limit":   int(r["team_limit"] or 0)
+                "prize_pool":   float(r["prize_pool"])
             })
 
-        # Final JSON response
         return jsonify({
             "wallet_balance":  wallet,
             "total_earnings":  total_earnings,
