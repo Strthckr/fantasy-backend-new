@@ -2503,6 +2503,28 @@ def user_dashboard(current_user_email):
 
 
 
+@app.route('/user/generate-teams', methods=['POST'])
+@token_required
+def generate_teams(current_user_email):
+    data     = request.get_json()
+    match_id = data.get('matchId')
+    count    = data.get('count', 100)
+
+    # get user_id from email
+    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+    user_id = cur.fetchone()[0]
+
+    # TODO: your AI logic to build `count` teams for user_id & match_id
+    # e.g. ai_service.build_teams(user_id, match_id, count)
+
+    return jsonify({'created': count}), 200
+
+
+
+
+
+
+
 
 @app.route('/test_env')
 def test_env():
