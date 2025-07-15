@@ -1,62 +1,105 @@
-import os
-import json
-import jwt
-import bcrypt
-import mysql.connector
+# ─── MODULE IMPORTS ─────────────────────────────────────────────────────────────
 from datetime import datetime, timedelta
-from functools import wraps
-
-from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
+import jwt
+from functools import wraps
+from flask import Flask, request, jsonify, make_response
+import mysql.connector
+import json
+from decimal import Decimal
 from dotenv import load_dotenv
+import os
+import bcrypt
+import traceback
 
-# 1) Load .env into os.environ
+# ─── LOAD ENVIRONMENT VARIABLES ────────────────────────────────────────────────
+# Load variables from a .env file (good for DB credentials, secret keys, etc.)
 load_dotenv()
 
-# 2) App setup
+# ✅ Debug print to confirm variables are loaded correctly
+print("✅ DB_HOST:", os.getenv("DB_HOST"))
+print("✅ DB_USER:", os.getenv("DB_USER"))
+print("✅ DB_PASSWORD:", os.getenv("DB_PASSWORD"))
+print("✅ DB_NAME:", os.getenv("DB_NAME"))
+print("✅ SECRET_KEY:", os.getenv("SECRET_KEY"))
+
+# ─── FLASK APP INITIALIZATION ──────────────────────────────────────────────────
 app = Flask(__name__)
 
-# Allow any origin (dev) or read from FRONTEND_URL
-FRONTEND_URL = os.getenv("FRONTEND_URL", "*")
-CORS(app, resources={r"/*": {"origins": FRONTEND_URL}})
+# CORS setup: Allow frontend on localhost:3000 to access this backend
+CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
 
-# JWT secret
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "fallback_secret")
+# Load secret key into Flask config from .env (used for JWT)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')
+print("✅ SECRET_KEY loaded:", app.config['SECRET_KEY'])
 
-# 3) Database connection
+# ─── DATABASE CONNECTION SETUP ─────────────────────────────────────────────────
+# Connect to MySQL using credentials from .env file
 db = mysql.connector.connect(
-    host     = os.getenv("DB_HOST"),
-    port     = int(os.getenv("DB_PORT", 3306)),
-    user     = os.getenv("DB_USER"),
-    password = os.getenv("DB_PASSWORD"),
-    database = os.getenv("DB_NAME")
+    host=os.getenv('DB_HOST'),
+    port=int(os.getenv('DB_PORT', 3306)),
+    user=os.getenv('DB_USER'),
+    password=os.getenv('DB_PASSWORD'),
+    database=os.getenv('DB_NAME')
 )
 
-# 4) JWT decorator
+# Create a global cursor (you may replace this with a per-request cursor if needed)
+cursor = db.cursor()
 
+# ─── JWT TOKEN PROTECTION DECORATOR ────────────────────────────────────────────
 def token_required(f):
     @wraps(f)
-    def wrapped(*args, **kwargs):
-        auth = request.headers.get("Authorization","")
-        if not auth.startswith("Bearer "):
-            return jsonify({"message":"Token is missing"}), 401
-        token = auth.split(" ",1)[1]
-        try:
-            payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
-            email = payload['email']
-        except jwt.ExpiredSignatureError:
-            return jsonify({"message":"Token expired"}), 401
-        except jwt.InvalidTokenError:
-            return jsonify({"message":"Invalid token"}), 401
-        return f(email, *args, **kwargs)
-    return wrapped
+    def decorated(*args, **kwargs):
+        # Step 1: Allow CORS preflight requests without checking JWT
+        if request.method == 'OPTIONS':
+            resp = make_response('', 204)  # No Content
+            # Allow headers for cross-origin support
+            resp.headers['Access-Control-Allow-Origin'] = 'http://localhost:3000'
+            resp.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
+            resp.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+            return resp
 
-# 5) Admin check (example)
+        # Step 2: Check for Authorization header and extract token
+        token = None
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]  # Extract token after 'Bearer'
+
+        # Step 3: If token missing, deny access
+        if not token:
+            return jsonify({'message': 'Token is missing!'}), 403
+
+        try:
+            # Step 4: Decode the token using the app's secret key
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            current_user_email = data['email']  # Extract email from token
+        except jwt.ExpiredSignatureError:
+            return jsonify({'message': 'Token has expired! Please login again.'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'message': 'Invalid token!'}), 401
+
+        # Step 5: Proceed to the actual route, passing email to it
+        return f(current_user_email, *args, **kwargs)
+
+    return decorated
+
+# ─── ADMIN CHECK FUNCTION ──────────────────────────────────────────────────────
+# Helper to check if a given user email belongs to an admin
 def is_admin_user(email):
-    cur = db.cursor()
-    cur.execute("SELECT is_admin FROM users WHERE email=%s", (email,))
-    row = cur.fetchone()
-    return bool(row and row[0] == 1)
+    cursor = db.cursor()
+    cursor.execute("SELECT is_admin FROM users WHERE email = %s", (email,))
+    result = cursor.fetchone()
+    return result and result[0] == 1  # Return True if is_admin == 1
+
+# ─── CORS PREFLIGHT HELPER (OPTIONAL) ──────────────────────────────────────────
+# Used to return proper headers in preflight responses manually
+def _build_cors_preflight_response():
+    response = jsonify({})
+    h = response.headers
+    h['Access-Control-Allow-Origin'] = 'http://localhost:3000'
+    h['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
+    h['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+    return response
 
 @app.route('/')
 def home():
