@@ -178,77 +178,63 @@ def dashboard(current_user_email):
         return jsonify({"error": str(err)}), 500
 
 
-
-# ----------  CREATE TEAM  ----------
+# 4. Create a team
 @app.route('/create_team', methods=['POST'])
 @token_required
 def create_team(current_user_email):
-    """
-    Body: {
-      "contest_id": 8,
-      "team_name": "Mighty XI",
-      "players": [
-        {
-          "player_name": "PlayerA1",
-          "role": "Bowler",
-          "credit": 8.5,
-          "captain": true,
-          "vice_captain": false
-        },
-        ...
-      ]
-    }
-    """
     try:
-        data = request.get_json()
-        print("✅ Incoming payload:", data)
-
+        data       = request.get_json()
         team_name  = data.get('team_name')
-        players    = data.get('players')  # now a list of dicts
+        players    = data.get('players', [])
         contest_id = data.get('contest_id')
 
-        if not team_name or not players or len(players) != 11 or not contest_id:
-            return jsonify({"message": "team_name, 11 valid players & contest_id required"}), 400
+        if not team_name or len(players)!=11 or not contest_id:
+            return jsonify({"message":"team_name, 11 players & contest_id required"}), 400
 
-        cur = cursor
-        cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+        # user id
+        cur = db.cursor()
+        cur.execute("SELECT id FROM users WHERE email=%s",(current_user_email,))
         row = cur.fetchone()
-        if not row:
-            return jsonify({"message": "User not found"}), 404
+        if not row: return jsonify({"message":"User not found"}),404
         user_id = row[0]
 
-        # Max teams per user check
-        cur.execute("SELECT max_teams_per_user FROM contests WHERE id=%s", (contest_id,))
-        max_teams = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM teams WHERE user_id=%s AND contest_id=%s", (user_id, contest_id))
-        if max_teams and cur.fetchone()[0] >= max_teams:
-            return jsonify({"message": f"Only {max_teams} teams allowed in this contest"}), 403
-
-        # Duplicate team check (based on player_name only)
-        submitted_names = sorted([p['player_name'] for p in players])
-        cur.execute("SELECT players FROM teams WHERE user_id=%s AND contest_id=%s", (user_id, contest_id))
-        for (js,) in cur.fetchall():
-            try:
-                existing = json.loads(js)
-                existing_names = sorted([p['player_name'] for p in existing])
-                if existing_names == submitted_names:
-                    return jsonify({"message": "Same player combination already used"}), 400
-            except Exception as e:
-                continue  # ignore if existing row can't parse
-
-        # Store full player objects as JSON
+        # max teams check
+        cur.execute("SELECT max_teams_per_user FROM contests WHERE id=%s",(contest_id,))
+        max_teams = cur.fetchone()[0] or 0
         cur.execute("""
-            INSERT INTO teams (team_name, players, user_id, contest_id)
-            VALUES (%s, %s, %s, %s)
-        """, (team_name, json.dumps(players), user_id, contest_id))
+          SELECT COUNT(*) FROM teams
+          WHERE user_id=%s AND contest_id=%s
+        """,(user_id,contest_id))
+        already = cur.fetchone()[0]
+        if max_teams and already>=max_teams:
+            return jsonify({"message":f"Only {max_teams} teams allowed"}),403
+
+        # duplicate combination
+        names = sorted([p['player_name'] for p in players])
+        cur.execute("""
+          SELECT players FROM teams
+          WHERE user_id=%s AND contest_id=%s
+        """,(user_id,contest_id))
+        for (js,) in cur.fetchall():
+          cols = json.loads(js) if js else []
+          if sorted([p['player_name'] for p in cols]) == names:
+            return jsonify({"message":"Same combination used"}),400
+
+        # insert
+        cur.execute("""
+          INSERT INTO teams
+            (team_name, players, user_id, contest_id)
+          VALUES (%s, %s, %s, %s)
+        """,(team_name,json.dumps(players),user_id,contest_id))
         db.commit()
+        return jsonify({"message":"Team created ✔"}),200
 
-        return jsonify({"message": "Team created ✔"})
-    
     except Exception as e:
-        print("❌ Backend error during team creation:", str(e))
-        return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
+        app.logger.exception(e)
+        return jsonify({"message":"Internal Server Error"}),500
 
+if __name__ == '__main__':
+    app.run(debug=True)
 # Join Contest API
 now = datetime.utcnow()
 
@@ -1334,25 +1320,24 @@ def call_update_status(current_user_email):
     return jsonify({"message": "Match statuses updated!"})
 
 
+# 1. List all matches
 @app.route('/matches', methods=['GET'])
 def get_matches():
-    """Return all matches with status normalised to UPPER-CASE."""
     try:
-        cursor = db.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT
-                id,
-                match_name       AS name,        -- easier for React
-                start_time,
-                UPPER(status)    AS status       -- always UPCOMING/LIVE/COMPLETED
-            FROM matches
-            ORDER BY start_time
+        cur = db.cursor(dictionary=True)
+        cur.execute("""
+          SELECT
+            id,
+            match_name   AS name,
+            start_time,
+            UPPER(status) AS status
+          FROM matches
+          ORDER BY start_time
         """)
-        matches = cursor.fetchall()
-        return jsonify(matches)
+        matches = cur.fetchall()
+        return jsonify(matches), 200
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
-
 
 
 @app.route('/admin/auto_lock_contests', methods=['POST'])
@@ -2383,167 +2368,96 @@ def prize_distributions(current_user_email):
 
 
 
-@app.route('/user/dashboard', methods=['GET', 'OPTIONS'])
+# 2. Dashboard (upcomingMatches + user wallet)
+@app.route('/user/dashboard', methods=['GET'])
 @token_required
 def user_dashboard(current_user_email):
-    if request.method == 'OPTIONS':
-        return make_response('', 204)
+    try:
+        # 2a. Get wallet
+        cur = db.cursor()
+        cur.execute("SELECT wallet_balance FROM users WHERE email=%s", (current_user_email,))
+        wallet = cur.fetchone()[0] or 0
 
-    # fetch user ID
-    cur = db.cursor()
-    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
-    user_id = cur.fetchone()[0]
+        # 2b. Get upcoming matches + their contests
+        cur = db.cursor(dictionary=True)
+        cur.execute("""
+          SELECT
+            m.id, m.match_name, m.start_time,
+            c.id            AS contest_id,
+            c.contest_name,
+            c.prize_pool,
+            c.max_teams_per_user AS team_limit
+          FROM matches m
+          JOIN contests c ON c.match_id = m.id
+          WHERE m.status = 'UPCOMING'
+          ORDER BY m.start_time, c.prize_pool DESC
+        """)
+        rows = cur.fetchall()
 
-    # 1) Wallet & earnings/spend
-    cur.execute("""
-      SELECT
-        COALESCE(SUM(CASE WHEN type='credit' THEN amount ELSE 0 END),0),
-        COALESCE(SUM(CASE WHEN type='debit'  THEN amount ELSE 0 END),0)
-      FROM transactions
-      WHERE user_id = %s
-    """, (user_id,))
-    total_credits, total_debits = cur.fetchone()
-    wallet_balance = round(total_credits - total_debits, 2)
+        # Group contests by match
+        matches = {}
+        for r in rows:
+          mid = r['id']
+          matches.setdefault(mid, {
+            id: mid,
+            match_name: r['match_name'],
+            start_time: r['start_time'].isoformat(),
+            contests: []
+          })
+          matches[mid]['contests'].append({
+            contest_id:    r['contest_id'],
+            contest_name:  r['contest_name'],
+            prize_pool:    float(r['prize_pool']),
+            team_limit:    r['team_limit']
+          })
 
-    # 2) Upcoming matches (next 5)
-    cur.execute("""
-      SELECT id, match_name, start_time
-      FROM matches
-      WHERE status='upcoming'
-      ORDER BY start_time
-      LIMIT 5
-    """)
-    upcoming = [
-      {'id': r[0], 'match_name': r[1], 'start_time': r[2].isoformat()}
-      for r in cur.fetchall()
-    ]
+        payload = {
+          "wallet_balance": float(wallet),
+          "user_email":     current_user_email,
+          "upcomingMatches": list(matches.values())
+        }
+        return jsonify(payload), 200
 
-    # 3) Active contests user joined (live)
-    cur.execute("""
-      SELECT c.id, c.contest_name, c.prize_pool, ce.id AS entry_id
-      FROM contests c
-      JOIN entries ce ON ce.contest_id = c.id
-      WHERE ce.user_id=%s AND c.status='live'
-      LIMIT 5
-    """, (user_id,))
-    active = [{
-      'contest_id': r[0],
-      'contest_name': r[1],
-      'prize_pool': float(r[2]),
-      'entry_id': r[3]
-    } for r in cur.fetchall()]
-
-    # 4) Recent 5 transactions
-    cur.execute("""
-      SELECT id, amount, type, description, created_at
-      FROM transactions
-      WHERE user_id=%s
-      ORDER BY created_at DESC
-      LIMIT 5
-    """, (user_id,))
-    recent_tx = [{
-      'id': r[0],
-      'amount': float(r[1]),
-      'type': r[2],
-      'description': r[3],
-      'date': r[4].isoformat()
-    } for r in cur.fetchall()]
-
-    # 5) Latest 3 contest results
-    cur.execute("""
-      SELECT c.id, c.contest_name,
-        SUM(CASE WHEN t.type='credit' THEN t.amount ELSE 0 END)
-        AS won_amount
-      FROM contests c
-      JOIN entries ce ON ce.contest_id=c.id
-      LEFT JOIN transactions t
-        ON t.user_id=ce.user_id
-        AND LOWER(t.description) LIKE '%prize%'
-        AND t.created_at BETWEEN c.end_time AND NOW()
-      WHERE ce.user_id=%s AND c.status='completed'
-      GROUP BY c.id, c.contest_name
-      ORDER BY c.end_time DESC
-      LIMIT 3
-    """, (user_id,))
-    results = []
-    for contest_id, name, won in cur.fetchall():
-      results.append({
-        'contest_id': contest_id,
-        'contest_name': name,
-        'won_amount': float(won or 0)
-      })
-
-    # 6) Daily net for past 7 days
-    cur.execute("""
-      SELECT DATE(created_at) AS day,
-        SUM(CASE WHEN type='credit' THEN amount ELSE -amount END) AS net
-      FROM transactions
-      WHERE user_id=%s
-        AND created_at >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
-      GROUP BY day
-      ORDER BY day
-    """, (user_id,))
-    spark = [{
-      'day': r[0].isoformat(),
-      'net': float(r[1] or 0)
-    } for r in cur.fetchall()]
-
-    return jsonify({
-      'wallet_balance': wallet_balance,
-      'total_earnings': round(total_credits, 2),
-      'total_spend':    round(total_debits, 2),
-      'net_balance':    wallet_balance,
-      'upcomingMatches': upcoming,
-      'activeContests':  active,
-      'recentTransactions': recent_tx,
-      'recentResults':  results,
-      'dailyNetHistory': spark
-    }), 200
-
+    except Exception as e:
+        app.logger.exception(e)
+        return jsonify({"message":"Failed to load dashboard"}), 500
 
 
 
 @app.route('/user/generate-teams', methods=['POST'])
 @token_required
 def generate_teams(current_user_email):
-    data = request.get_json()
-    match_id   = data.get('matchId')
-    contest_id = data.get('contestId')
-    count      = data.get('count', 1)
+    data     = request.get_json()
+    match_id = data.get('matchId')
+    count    = data.get('count', 100)
 
-    if not (match_id and contest_id):
-        return jsonify({'error':'matchId and contestId required'}), 400
+    # get user_id from email
+    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+    user_id = cur.fetchone()[0]
 
+    # TODO: your AI logic to build `count` teams for user_id & match_id
+    # e.g. ai_service.build_teams(user_id, match_id, count)
+
+    return jsonify({'created': count}), 200
+
+
+
+# 3. List players for a match
+@app.route('/match/<int:match_id>/players', methods=['GET'])
+@token_required
+def get_players(current_user_email, match_id):
     try:
-        # lookup user
-        cur.execute('SELECT id FROM users WHERE email=%s', (current_user_email,))
-        user_id = cur.fetchone()[0]
-
-        # ensure count ≤ contest limit (pseudo)
-        cur.execute('SELECT team_limit FROM contests WHERE id=%s', (contest_id,))
-        team_limit = cur.fetchone()[0]
-        if count > team_limit:
-            return jsonify({'error': f'Cannot generate more than {team_limit} teams'}), 400
-
-        # TODO: your AI logic: build `count` teams for this user
-        teams = []
-        for i in range(count):
-            # pseudo: generate team structure
-            team_id = ai_generate_team(user_id, match_id)
-            teams.append({
-                'id': team_id,
-                'captain': 'Player A',
-                'viceCaptain': 'Player B'
-            })
-
-        return jsonify({'teams': teams}), 200
-
-    except Exception as ex:
-        app.logger.exception(ex)
-        return jsonify({'error':'Internal server error'}), 500
-
-
-
+        cur = db.cursor()
+        cur.execute("""
+          SELECT id, player_name
+          FROM players
+          WHERE match_id = %s
+        """, (match_id,))
+        players = [{"id":r[0], "player_name":r[1]} for r in cur.fetchall()]
+        return jsonify({"players": players}), 200
+    except Exception as e:
+        app.logger.exception(e)
+        return jsonify({"message":"Failed to load players"}), 500
 
 
 
