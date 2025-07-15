@@ -2506,19 +2506,41 @@ def user_dashboard(current_user_email):
 @app.route('/user/generate-teams', methods=['POST'])
 @token_required
 def generate_teams(current_user_email):
-    data     = request.get_json()
-    match_id = data.get('matchId')
-    count    = data.get('count', 100)
+    data = request.get_json()
+    match_id   = data.get('matchId')
+    contest_id = data.get('contestId')
+    count      = data.get('count', 1)
 
-    # get user_id from email
-    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
-    user_id = cur.fetchone()[0]
+    if not (match_id and contest_id):
+        return jsonify({'error':'matchId and contestId required'}), 400
 
-    # TODO: your AI logic to build `count` teams for user_id & match_id
-    # e.g. ai_service.build_teams(user_id, match_id, count)
+    try:
+        # lookup user
+        cur.execute('SELECT id FROM users WHERE email=%s', (current_user_email,))
+        user_id = cur.fetchone()[0]
 
-    return jsonify({'created': count}), 200
+        # ensure count ≤ contest limit (pseudo)
+        cur.execute('SELECT team_limit FROM contests WHERE id=%s', (contest_id,))
+        team_limit = cur.fetchone()[0]
+        if count > team_limit:
+            return jsonify({'error': f'Cannot generate more than {team_limit} teams'}), 400
 
+        # TODO: your AI logic: build `count` teams for this user
+        teams = []
+        for i in range(count):
+            # pseudo: generate team structure
+            team_id = ai_generate_team(user_id, match_id)
+            teams.append({
+                'id': team_id,
+                'captain': 'Player A',
+                'viceCaptain': 'Player B'
+            })
+
+        return jsonify({'teams': teams}), 200
+
+    except Exception as ex:
+        app.logger.exception(ex)
+        return jsonify({'error':'Internal server error'}), 500
 
 
 
