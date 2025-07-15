@@ -2378,69 +2378,135 @@ def prize_distributions(current_user_email):
 
 
 # 2. Dashboard (upcomingMatches + user wallet)
+from datetime import datetime, timedelta
+from flask import jsonify, request
+import mysql.connector
+
 @app.route('/user/dashboard', methods=['GET'])
 @token_required
 def user_dashboard(current_user_email):
     try:
+        # parse range (days) query param
+        days = int(request.args.get('range', 7))
+        since = datetime.utcnow() - timedelta(days=days)
+
+        # dict cursor
         cur = db.cursor(dictionary=True)
 
-        # 1) Wallet balance from wallets.balance
-        cur.execute("""
-            SELECT w.balance
-            FROM wallets w
-            JOIN users u ON u.id = w.user_id
-            WHERE u.email = %s
-        """, (current_user_email,))
-        row = cur.fetchone()
-        wallet = float(row['balance'] or 0) if row else 0.0
+        # 1) Get user_id
+        cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+        user = cur.fetchone()
+        if not user:
+            return jsonify({"message":"User not found"}), 404
+        uid = user['id']
 
-        # 2) Upcoming matches + contests (unchanged)
+        # 2) Wallet balance
+        cur.execute("SELECT balance FROM wallets WHERE user_id=%s", (uid,))
+        row = cur.fetchone()
+        wallet = float(row['balance'] or 0) if row else 0
+
+        # 3) Earnings & spend & net in range
         cur.execute("""
-            SELECT
-              m.id               AS match_id,
-              m.match_name,
-              m.start_time,
-              c.id               AS contest_id,
-              c.contest_name,
-              c.prize_pool,
-              c.max_teams_per_user AS team_limit
-            FROM matches m
-            JOIN contests c ON c.match_id = m.id
-            WHERE UPPER(m.status) = 'UPCOMING'
-            ORDER BY m.start_time, c.prize_pool DESC
+          SELECT 
+            SUM(CASE WHEN t.type='credit' THEN t.amount ELSE 0 END) AS earnings,
+            SUM(CASE WHEN t.type='debit'  THEN t.amount ELSE 0 END) AS spend
+          FROM transactions t
+          WHERE t.user_id=%s AND t.created_at >= %s
+        """, (uid, since))
+        stats = cur.fetchone()
+        total_earnings = float(stats['earnings'] or 0)
+        total_spend    = float(stats['spend']    or 0)
+        net_balance    = total_earnings - total_spend
+
+        # 4) Daily net history
+        cur.execute("""
+          SELECT 
+            DATE(t.created_at)        AS day,
+            SUM(
+              CASE WHEN t.type='credit' THEN t.amount 
+                   ELSE -t.amount END
+            ) AS net
+          FROM transactions t
+          WHERE t.user_id=%s AND t.created_at >= %s
+          GROUP BY day
+          ORDER BY day
+        """, (uid, since))
+        dailyNetHistory = [
+          {"day": r["day"].isoformat(), "net": float(r["net"])} 
+          for r in cur.fetchall()
+        ]
+
+        # 5) Active contests (upcoming or live)
+        cur.execute("""
+          SELECT 
+            uc.id          AS entry_id,
+            c.id           AS contest_id,
+            c.contest_name,
+            c.prize_pool
+          FROM user_contests uc
+          JOIN contests c ON uc.contest_id = c.id
+          JOIN matches m ON c.match_id    = m.id
+          WHERE uc.user_id=%s 
+            AND UPPER(m.status) IN ('UPCOMING','LIVE')
+        """, (uid,))
+        activeContests = [
+          {
+            "entry_id":      r["entry_id"],
+            "contest_id":    r["contest_id"],
+            "contest_name":  r["contest_name"],
+            "prize_pool":    float(r["prize_pool"])
+          }
+          for r in cur.fetchall()
+        ]
+
+        # 6) Upcoming matches + contests
+        cur.execute("""
+          SELECT
+            m.id               AS match_id,
+            m.match_name,
+            m.start_time,
+            c.id               AS contest_id,
+            c.contest_name,
+            c.prize_pool
+          FROM matches m
+          JOIN contests c ON c.match_id = m.id
+          WHERE UPPER(m.status) = 'UPCOMING'
+          ORDER BY m.start_time, c.prize_pool DESC
         """)
         rows = cur.fetchall()
-
-        # 3) Group by match
         matches = {}
         for r in rows:
-            mid = r['match_id']
+            mid = r["match_id"]
             if mid not in matches:
                 matches[mid] = {
-                    "id": mid,
-                    "match_name": r['match_name'],
-                    "start_time": r['start_time'].isoformat(),
-                    "contests": []
+                  "id": mid,
+                  "match_name": r["match_name"],
+                  "start_time": r["start_time"].isoformat(),
+                  "contests": []
                 }
             matches[mid]["contests"].append({
-                "contest_id":   r['contest_id'],
-                "contest_name": r['contest_name'],
-                "prize_pool":   float(r['prize_pool']),
-                "team_limit":   r['team_limit']
+                "contest_id":   r["contest_id"],
+                "contest_name": r["contest_name"],
+                "prize_pool":   float(r["prize_pool"])
             })
 
         return jsonify({
             "wallet_balance":  wallet,
-            "user_email":      current_user_email,
-            "upcomingMatches": list(matches.values())
+            "total_earnings":  total_earnings,
+            "total_spend":     total_spend,
+            "net_balance":     net_balance,
+            "dailyNetHistory": dailyNetHistory,
+            "activeContests":  list(activeContests),
+            "upcomingMatches": list(matches.values()),
+            "user_email":      current_user_email
         }), 200
 
     except mysql.connector.Error as err:
-        app.logger.error("DB error on /user/dashboard: %s", err)
+        app.logger.error("DB error: %s", err)
         return jsonify({"message":"Database error","error":str(err)}), 500
 
     except Exception as e:
-        app.logger.exception("Server error on /user/dashboard")
+        app.logger.exception("Server error")
         return jsonify({"message":"Internal server error","error":str(e)}), 500
 
 @app.route('/user/generate-teams', methods=['POST'])
