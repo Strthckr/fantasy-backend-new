@@ -2461,15 +2461,15 @@ def user_dashboard(current_user_email):
 
         # 6) Upcoming matches + contests
         cur.execute("""
-             SELECT
-     m.id               AS match_id,
-    m.match_name,
-    m.start_time,
-    c.id               AS contest_id,
-    c.contest_name,
-    c.prize_pool,
-    IFNULL(c.joined_users, 0) AS joined_users,
-    IFNULL(c.max_users, 0)    AS max_users 
+          SELECT
+            m.id               AS match_id,
+            m.match_name,
+            m.start_time,
+            c.id               AS contest_id,
+            c.contest_name,
+            c.prize_pool,
+            IFNULL(c.joined_users, 0) AS joined_users,
+            IFNULL(c.max_users, 0)    AS max_users 
           FROM matches m
           JOIN contests c ON c.match_id = m.id
           WHERE UPPER(m.status) = 'UPCOMING'
@@ -2494,9 +2494,36 @@ def user_dashboard(current_user_email):
                 "max_entries":  int(r["max_users"] or 0)
             })
 
+        # 7) User teams for upcoming matches
+        cur.execute("""
+            SELECT 
+                t.id           AS team_id,
+        t.team_name,
+        t.contest_id,
+        t.total_points,
+        t.players,
+        m.id           AS match_id,
+        m.match_name
+    FROM teams t
+    JOIN contests c ON t.contest_id = c.id
+    JOIN matches m  ON c.match_id   = m.id
+    WHERE t.user_id = %s
+      AND UPPER(m.status) = 'UPCOMING'
+        """, (uid,))
+        userTeams = [
+            {
+                 "team_id":      r["team_id"],
+        "team_name":    r["team_name"],
+        "match_id":     r["match_id"],
+        "match_name":   r["match_name"],
+        "contest_id":   r["contest_id"],
+        "total_points": r["total_points"],
+        "players":      r["players"]
+            }
+            for r in cur.fetchall()
+        ]
 
-            
-
+        # Final response
         return jsonify({
             "wallet_balance":  wallet,
             "total_earnings":  total_earnings,
@@ -2505,12 +2532,9 @@ def user_dashboard(current_user_email):
             "dailyNetHistory": dailyNetHistory,
             "activeContests":  list(activeContests),
             "upcomingMatches": list(matches.values()),
+            "userTeams":       userTeams,
             "user_email":      current_user_email
         }), 200
-
-
-
-
 
     except mysql.connector.Error as err:
         app.logger.error("DB error: %s", err)
