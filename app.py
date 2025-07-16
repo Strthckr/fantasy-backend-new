@@ -2333,6 +2333,55 @@ def commissions(current_user_email):
         return jsonify({'error': str(e)}), 500
 
 
+
+@app.route('/admin/prize_distributions', methods=['GET','OPTIONS'])
+@token_required
+def prize_distributions(current_user_email):
+    if request.method == 'OPTIONS':
+        return make_response('', 204)
+
+    if not is_admin_user(current_user_email):
+        return jsonify({'message':'Unauthorized'}), 403
+
+    try:
+        cur = db.cursor(dictionary=True)
+        cur.execute("""
+            SELECT
+              t.id,
+              t.user_id,
+              u.username,
+              t.amount,
+              t.description,
+              t.created_at AS date
+            FROM transactions t
+            JOIN users u ON t.user_id = u.id
+            WHERE t.type = 'credit'
+            ORDER BY t.created_at DESC
+        """)
+        rows = cur.fetchall()
+
+        result = [{
+            'id':          r['id'],
+            'user_id':     r['user_id'],
+            'username':    r['username'] or '',
+            'amount':      float(r['amount'] or 0),
+            'description': r['description'] or '',
+            'date':        r['date'].isoformat()
+        } for r in rows]
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+
+# 2. Dashboard (upcomingMatches + user wallet)
+from datetime import datetime, timedelta
+from flask import jsonify, request
+import mysql.connector
+
 @app.route('/user/dashboard', methods=['GET'])
 @token_required
 def user_dashboard(current_user_email):
@@ -2412,15 +2461,15 @@ def user_dashboard(current_user_email):
 
         # 6) Upcoming matches + contests
         cur.execute("""
-          SELECT
-            m.id               AS match_id,
-            m.match_name,
-            m.start_time,
-            c.id               AS contest_id,
-            c.contest_name,
-            c.prize_pool,
-            IFNULL(c.joined_users, 0) AS joined_users,
-            IFNULL(c.max_users, 0)    AS max_users 
+             SELECT
+     m.id               AS match_id,
+    m.match_name,
+    m.start_time,
+    c.id               AS contest_id,
+    c.contest_name,
+    c.prize_pool,
+    IFNULL(c.joined_users, 0) AS joined_users,
+    IFNULL(c.max_users, 0)    AS max_users 
           FROM matches m
           JOIN contests c ON c.match_id = m.id
           WHERE UPPER(m.status) = 'UPCOMING'
@@ -2445,34 +2494,9 @@ def user_dashboard(current_user_email):
                 "max_entries":  int(r["max_users"] or 0)
             })
 
-        # 7) User teams for upcoming matches
-        cur.execute("""
-            SELECT 
-                t.id           AS team_id,
-                t.team_name,
-                t.match_id,
-                t.contest_id,
-                t.total_points,
-                t.players
-            FROM teams t
-            WHERE t.user_id = %s
-              AND t.match_id IN (
-                  SELECT m.id FROM matches m WHERE UPPER(m.status) = 'UPCOMING'
-              )
-        """, (uid,))
-        userTeams = [
-            {
-                "team_id":      r["team_id"],
-                "team_name":    r["team_name"],
-                "match_id":     r["match_id"],
-                "contest_id":   r["contest_id"],
-                "total_points": r["total_points"],
-                "players":      r["players"]
-            }
-            for r in cur.fetchall()
-        ]
 
-        # Final response
+            
+
         return jsonify({
             "wallet_balance":  wallet,
             "total_earnings":  total_earnings,
@@ -2481,9 +2505,12 @@ def user_dashboard(current_user_email):
             "dailyNetHistory": dailyNetHistory,
             "activeContests":  list(activeContests),
             "upcomingMatches": list(matches.values()),
-            "userTeams":       userTeams,
             "user_email":      current_user_email
         }), 200
+
+
+
+
 
     except mysql.connector.Error as err:
         app.logger.error("DB error: %s", err)
@@ -2492,6 +2519,7 @@ def user_dashboard(current_user_email):
     except Exception as e:
         app.logger.exception("Server error")
         return jsonify({"message":"Internal server error","error":str(e)}), 500
+
 
 
 
@@ -2531,11 +2559,6 @@ def generate_teams(current_user):
         ))
     mysql.connection.commit()
     return jsonify({"success": True, "message": f"{num_teams} teams created."})
-
-
-
-
-
 
 
 
