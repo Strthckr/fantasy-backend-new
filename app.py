@@ -2462,14 +2462,15 @@ def user_dashboard(current_user_email):
         # 6) Upcoming matches + contests
         cur.execute("""
           SELECT
-            m.id               AS match_id,
-            m.match_name,
-            m.start_time,
-            c.id               AS contest_id,
-            c.contest_name,
-            c.prize_pool,
-            c.joined_users,
-            c.max_users AS max_entries
+             SELECT
+    m.id               AS match_id,
+    m.match_name,
+    m.start_time,
+    c.id               AS contest_id,
+    c.contest_name,
+    c.prize_pool,
+    c.joined_users     AS entries,
+    c.max_users        AS max_users 
           FROM matches m
           JOIN contests c ON c.match_id = m.id
           WHERE UPPER(m.status) = 'UPCOMING'
