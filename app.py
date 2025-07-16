@@ -2561,43 +2561,56 @@ def user_dashboard(current_user_email):
 
 
 
-
-
-@app.route("/user/generate_teams", methods=["POST"])
+@app.route('/match/<int:match_id>/generate-team', methods=['POST', 'OPTIONS'])
 @token_required
-def generate_teams(current_user):
-    data = request.get_json()
-    match_id = data.get("match_id")
-    num_teams = data.get("num_teams")
+def generate_team(current_user_email, match_id):
+    try:
+        data = request.get_json()
+        contest_id = data.get("contest_id")
+        num_teams = data.get("num_teams", 1)
 
-    if not match_id or not num_teams:
-        return jsonify({"error": "Missing match_id or num_teams"}), 400
+        if not contest_id or not match_id:
+            return jsonify({"message": "contest_id and match_id required"}), 400
 
-    # Fetch player pool for this match
-    cur = mysql.connection.cursor(dictionary=True)
-    cur.execute("SELECT * FROM players WHERE match_id = %s", (match_id,))
-    player_pool = cur.fetchall()
+        cur = db.cursor(dictionary=True)
 
-    if not player_pool:
-        return jsonify({"error": "No players for this match"}), 404
+        # Get user ID
+        cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+        user_row = cur.fetchone()
+        if not user_row:
+            return jsonify({"message": "User not found"}), 404
+        user_id = user_row["id"]
 
-    # Dummy random team generation (Replace this logic later with smarter AI)
-    import random, json
+        # Get player pool for this match
+        cur.execute("SELECT player_name FROM players WHERE match_id = %s", (match_id,))
+        pool = [p["player_name"] for p in cur.fetchall()]
+        if len(pool) < 11:
+            return jsonify({"message": "Not enough players to generate team"}), 400
 
-    generated = []
-    for _ in range(num_teams):
-        team_players = random.sample(player_pool, 11)
-        generated.append({
-            "players": [p["id"] for p in team_players]
-        })
+        import random, json
 
-    # Save each team to DB
-    for team in generated:
-        cur.execute("INSERT INTO teams (user_id, match_id, players_json) VALUES (%s, %s, %s)", (
-            current_user["id"], match_id, json.dumps(team["players"])
-        ))
-    mysql.connection.commit()
-    return jsonify({"success": True, "message": f"{num_teams} teams created."})
+        team_ids = []
+        for i in range(num_teams):
+            picked = random.sample(pool, 11)
+            team_name = f"AI Team {i+1}"
+
+            cur.execute("""
+              INSERT INTO teams (team_name, players, user_id, contest_id)
+              VALUES (%s, %s, %s, %s)
+            """, (team_name, json.dumps(picked), user_id, contest_id))
+            db.commit()
+            team_ids.append(cur.lastrowid)
+
+        return jsonify({
+            "success": True,
+            "team_id": team_ids[0],  # Return first team_id
+            "message": f"{num_teams} AI team(s) created ✔"
+        }), 200
+
+    except Exception as e:
+        app.logger.exception(e)
+        return jsonify({"message": "Internal Server Error"}), 500
+
 
 
 
