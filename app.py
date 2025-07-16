@@ -2627,7 +2627,6 @@ def join_multiple_teams(current_user_email, contest_id):
 
 
 
-
 @app.route('/user/contest/<int:contest_id>/entries', methods=['GET', 'OPTIONS'])
 @token_required
 def user_contest_entries(current_user_email, contest_id):
