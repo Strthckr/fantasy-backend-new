@@ -2678,6 +2678,47 @@ def user_contest_entries(current_user_email, contest_id):
 
 
 
+@app.route('/user/team/<int:team_id>', methods=['GET', 'OPTIONS'])
+@token_required
+def get_user_team(current_user_email, team_id):
+    if request.method == 'OPTIONS':
+        return '', 204  # Handle CORS preflight
+
+    try:
+        cur = db.cursor(dictionary=True)
+
+        # Find the logged-in user's ID
+        cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+        user_row = cur.fetchone()
+        if not user_row:
+            return jsonify({"message": "User not found"}), 404
+        user_id = user_row["id"]
+
+        # Retrieve the team if it belongs to the user
+        cur.execute("""
+            SELECT team_name, players
+            FROM teams
+            WHERE id = %s AND user_id = %s
+        """, (team_id, user_id))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"message": "Team not found"}), 404
+
+        import json
+        players = json.loads(row["players"]) if row["players"] else []
+
+        return jsonify({
+            "team_name": row["team_name"],
+            "players": players
+        }), 200
+
+    except Exception as e:
+        app.logger.exception("🛑 Failed to load team:")
+        return jsonify({"message": "Internal Server Error"}), 500
+
+
+
+
 
 @app.route('/test_env')
 def test_env():
