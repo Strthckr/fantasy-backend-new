@@ -187,7 +187,6 @@ def dashboard(current_user_email):
         return jsonify({"error": str(err)}), 500
 
 
-# 4. Create a team
 @app.route('/create_team', methods=['POST'])
 @token_required
 def create_team(current_user_email):
@@ -197,50 +196,66 @@ def create_team(current_user_email):
         players    = data.get('players', [])
         contest_id = data.get('contest_id')
 
-        if not team_name or len(players)!=11 or not contest_id:
-            return jsonify({"message":"team_name, 11 players & contest_id required"}), 400
+        if not team_name or len(players) != 11 or not contest_id:
+            return jsonify({"message": "team_name, 11 players & contest_id required"}), 400
 
-        # user id
+        # user ID lookup
         cur = db.cursor()
-        cur.execute("SELECT id FROM users WHERE email=%s",(current_user_email,))
+        cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
         row = cur.fetchone()
-        if not row: return jsonify({"message":"User not found"}),404
+        if not row:
+            return jsonify({"message": "User not found"}), 404
         user_id = row[0]
 
         # max teams check
-        cur.execute("SELECT max_teams_per_user FROM contests WHERE id=%s",(contest_id,))
+        cur.execute("SELECT max_teams_per_user FROM contests WHERE id=%s", (contest_id,))
         max_teams = cur.fetchone()[0] or 0
+
         cur.execute("""
-          SELECT COUNT(*) FROM teams
-          WHERE user_id=%s AND contest_id=%s
-        """,(user_id,contest_id))
+            SELECT COUNT(*) FROM teams
+            WHERE user_id=%s AND contest_id=%s
+        """, (user_id, contest_id))
         already = cur.fetchone()[0]
-        if max_teams and already>=max_teams:
-            return jsonify({"message":f"Only {max_teams} teams allowed"}),403
+        if max_teams and already >= max_teams:
+            return jsonify({"message": f"Only {max_teams} teams allowed"}), 403
 
-        # duplicate combination
-        names = sorted([p['player_name'] for p in players])
+        # current combination to check against duplicates
+        current_names = sorted([p['player_name'] for p in players])
+
         cur.execute("""
-          SELECT players FROM teams
-          WHERE user_id=%s AND contest_id=%s
-        """,(user_id,contest_id))
+            SELECT players FROM teams
+            WHERE user_id=%s AND contest_id=%s
+        """, (user_id, contest_id))
+
         for (js,) in cur.fetchall():
-          cols = json.loads(js) if js else []
-          if sorted([p['player_name'] for p in cols]) == names:
-            return jsonify({"message":"Same combination used"}),400
+            existing = json.loads(js) if js else []
+            if not existing:
+                continue
 
-        # insert
+            # safe handling based on structure
+            if isinstance(existing[0], dict) and 'player_name' in existing[0]:
+                existing_names = sorted([p['player_name'] for p in existing])
+            elif isinstance(existing[0], str):
+                existing_names = sorted(existing)
+            else:
+                continue  # unknown structure, skip
+
+            if existing_names == current_names:
+                return jsonify({"message": "Same combination used"}), 400
+
+        # insert the new team
         cur.execute("""
-          INSERT INTO teams
-            (team_name, players, user_id, contest_id)
-          VALUES (%s, %s, %s, %s)
-        """,(team_name,json.dumps(players),user_id,contest_id))
+            INSERT INTO teams
+                (team_name, players, user_id, contest_id)
+            VALUES (%s, %s, %s, %s)
+        """, (team_name, json.dumps(players), user_id, contest_id))
         db.commit()
-        return jsonify({"message":"Team created ✔"}),200
+
+        return jsonify({"message": "Team created ✔"}), 200
 
     except Exception as e:
         app.logger.exception(e)
-        return jsonify({"message":"Internal Server Error"}),500
+        return jsonify({"message": "Internal Server Error"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
