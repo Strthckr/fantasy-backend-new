@@ -2467,7 +2467,9 @@ def user_dashboard(current_user_email):
             m.start_time,
             c.id               AS contest_id,
             c.contest_name,
-            c.prize_pool
+            c.prize_pool,
+            c.joined_users,
+            c.max.users
           FROM matches m
           JOIN contests c ON c.match_id = m.id
           WHERE UPPER(m.status) = 'UPCOMING'
@@ -2487,7 +2489,9 @@ def user_dashboard(current_user_email):
             matches[mid]["contests"].append({
                 "contest_id":   r["contest_id"],
                 "contest_name": r["contest_name"],
-                "prize_pool":   float(r["prize_pool"])
+                "prize_pool":   float(r["prize_pool"]),
+                "entries":      int(r["joined_users"] or 0),
+                "max_entries":  int(r["max_users"] or 0)
             })
 
         return jsonify({
