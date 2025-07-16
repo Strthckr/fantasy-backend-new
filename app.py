@@ -2461,7 +2461,6 @@ def user_dashboard(current_user_email):
 
         # 6) Upcoming matches + contests
         cur.execute("""
-          SELECT
              SELECT
     m.id               AS match_id,
     m.match_name,
