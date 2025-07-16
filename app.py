@@ -2534,27 +2534,6 @@ def generate_teams(current_user):
 
 
 
-@app.route('/contest/<int:contest_id>/join-teams', methods=['POST'])
-@token_required
-def join_multiple_teams(current_user_email, contest_id):
-    data = request.json
-    team_ids = data.get("team_ids", [])
-
-    cur = db.cursor()
-    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
-    user = cur.fetchone()
-    if not user:
-        return jsonify({"message":"User not found"}), 404
-    uid = user[0]
-
-    for tid in team_ids:
-        cur.execute("SELECT COUNT(*) FROM user_contests WHERE user_id=%s AND contest_id=%s", (uid, contest_id))
-        already = cur.fetchone()[0]
-        if already == 0:
-            cur.execute("INSERT INTO user_contests (user_id, contest_id) VALUES (%s, %s)", (uid, contest_id))
-    db.commit()
-
-    return jsonify({"message":"Teams joined successfully"})
 
 
 
