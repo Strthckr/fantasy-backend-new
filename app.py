@@ -2627,6 +2627,32 @@ def join_multiple_teams(current_user_email, contest_id):
 
 
 
+
+@app.route('/contest/<int:contest_id>/entries', methods=['GET'])
+@token_required
+def contest_entries(current_user_email, contest_id):
+    cur = db.cursor(dictionary=True)
+    cur.execute("""
+        SELECT 
+            e.id,
+            e.team_id,
+            u.username,
+            t.team_name,
+            t.total_points,
+            t.players,
+            e.joined_at
+        FROM entries e
+        JOIN teams t ON e.team_id = t.id
+        JOIN users u ON e.user_id = u.id
+        WHERE e.contest_id = %s
+        ORDER BY e.joined_at DESC
+    """, (contest_id,))
+    entries = cur.fetchall()
+    return jsonify({ "entries": entries }), 200
+
+
+
+
 @app.route('/test_env')
 def test_env():
     return jsonify({
