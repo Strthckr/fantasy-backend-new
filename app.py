@@ -2469,7 +2469,7 @@ def user_dashboard(current_user_email):
             c.contest_name,
             c.prize_pool,
             c.joined_users,
-            c.max.users
+            c.max_users AS MAX_Entries
           FROM matches m
           JOIN contests c ON c.match_id = m.id
           WHERE UPPER(m.status) = 'UPCOMING'
