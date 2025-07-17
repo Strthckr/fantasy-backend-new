@@ -2566,6 +2566,7 @@ def generate_team(current_user_email, match_id):
     if request.method == 'OPTIONS':
         return '', 204
 
+    import random, json
     data       = request.get_json() or {}
     contest_id = data.get('contest_id')
     num_teams  = int(data.get('num_teams', 1))
@@ -2574,21 +2575,20 @@ def generate_team(current_user_email, match_id):
         return jsonify({"message": "contest_id required"}), 400
 
     cur = db.cursor(dictionary=True)
-
-    # 1) Fetch user_id
+    # 1) fetch user_id
     cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
     row = cur.fetchone()
     if not row:
         return jsonify({"message": "User not found"}), 404
     user_id = row['id']
 
-    # 2) Fetch player pool
+    # 2) fetch player pool
     cur.execute("SELECT player_name, role FROM players WHERE match_id=%s", (match_id,))
     pool = cur.fetchall()
     if not pool:
         return jsonify({"message": "No players found for this match"}), 404
 
-    # Helper to pick one valid 11-player team
+    # helper to pick one team
     def pick_team(pool):
         batsmen     = [p for p in pool if p['role']=='batsman']
         bowlers     = [p for p in pool if p['role']=='bowler']
@@ -2597,59 +2597,52 @@ def generate_team(current_user_email, match_id):
         if len(batsmen)<4 or len(bowlers)<3 or len(allrounders)<2 or len(keepers)<1:
             return None
 
-        team = (
-            random.sample(batsmen, 4) +
-            random.sample(bowlers, 3) +
-            random.sample(allrounders, 2) +
-            random.sample(keepers, 1)
-        )
+        team = (random.sample(batsmen,4) +
+                random.sample(bowlers,3) +
+                random.sample(allrounders,2) +
+                random.sample(keepers,1))
+        # fill 11th
+        names = {p['player_name'] for p in team}
+        extra = [p for p in pool if p['player_name'] not in names]
+        if extra:
+            team.append(random.choice(extra))
 
-        # Fill 11th player
-        selected = {p['player_name'] for p in team}
-        extras   = [p for p in pool if p['player_name'] not in selected]
-        if extras:
-            team.append(random.choice(extras))
-
-        # Assign captain & vice-captain
-        captain = random.choice(team)
-        vice_candidates = [p for p in team if p != captain]
-        vice_captain = random.choice(vice_candidates) if vice_candidates else captain
-
+        # assign C & VC
+        cap = random.choice(team)
+        vice = random.choice([p for p in team if p!=cap]) if len(team)>1 else cap
         for p in team:
-            p['is_captain']      = (p == captain)
-            p['is_vice_captain'] = (p == vice_captain)
-
+            p['is_captain']       = (p==cap)
+            p['is_vice_captain']  = (p==vice)
         return team
 
     team_ids = []
     for i in range(num_teams):
         squad = pick_team(pool)
         if not squad:
-            return jsonify({"message":"Not enough players per role"}), 400
+            return jsonify({"message": "Not enough players per role"}), 400
 
         team_name = f"AI Team {i+1}"
-        # insert into teams
         cur.execute("""
-          INSERT INTO teams (team_name, players, user_id, contest_id)
-          VALUES (%s, %s, %s, %s)
+            INSERT INTO teams (team_name, players, user_id, contest_id)
+            VALUES (%s,%s,%s,%s)
         """, (team_name, json.dumps(squad), user_id, contest_id))
         team_id = cur.lastrowid
 
-        # insert into entries so it shows up in /entries
+        # **INSERT into entries** so it shows up on /entries
         cur.execute("""
-          INSERT INTO entries (contest_id, user_id, team_id)
-          VALUES (%s, %s, %s)
+            INSERT INTO entries (contest_id, user_id, team_id)
+            VALUES (%s,%s,%s)
         """, (contest_id, user_id, team_id))
 
         team_ids.append(team_id)
-
-    db.commit()
+        db.commit()
 
     return jsonify({
         "success":  True,
         "team_ids": team_ids,
         "message":  f"{num_teams} AI team(s) created ✔"
     }), 200
+
 
 
 
@@ -2694,24 +2687,25 @@ def join_multiple_teams(current_user_email, contest_id):
     return jsonify({"message":"Teams joined successfully"})
 
 
+
 @app.route('/user/contest/<int:contest_id>/entries', methods=['GET', 'OPTIONS'])
 @token_required
 def user_contest_entries(current_user_email, contest_id):
     cur = db.cursor(dictionary=True)
     cur.execute("""
-      SELECT 
-        e.id,
-        e.team_id,
-        u.username,
-        t.team_name,
-        t.total_points,
-        t.players,
-        e.joined_at
-      FROM entries e
-      JOIN teams t   ON e.team_id = t.id
-      JOIN users u   ON e.user_id = u.id
-      WHERE e.contest_id = %s
-      ORDER BY e.joined_at DESC
+        SELECT 
+            e.id,
+            e.team_id,
+            u.username,
+            t.team_name,
+            t.total_points,
+            t.players,
+            e.joined_at
+        FROM entries e
+        JOIN teams t ON e.team_id = t.id
+        JOIN users u ON e.user_id = u.id
+        WHERE e.contest_id = %s
+        ORDER BY e.joined_at DESC
     """, (contest_id,))
     return jsonify({ "entries": cur.fetchall() }), 200
 
