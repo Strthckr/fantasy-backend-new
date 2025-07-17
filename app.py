@@ -2560,11 +2560,14 @@ def user_dashboard(current_user_email):
         return jsonify({"message":"Internal server error","error":str(e)}), 500
 
 
-
 @app.route('/match/<int:match_id>/generate-team', methods=['POST', 'OPTIONS'])
 @token_required
 def generate_team(current_user_email, match_id):
+    if request.method == 'OPTIONS':
+        return '', 204  # CORS preflight support
+
     try:
+        import random, json
         data = request.get_json()
         contest_id = data.get("contest_id")
         num_teams = data.get("num_teams", 1)
@@ -2572,7 +2575,6 @@ def generate_team(current_user_email, match_id):
         if not contest_id or not match_id:
             return jsonify({"message": "contest_id and match_id required"}), 400
 
-        import random, json
         cur = db.cursor(dictionary=True)
 
         # 🔐 Get user ID from email
@@ -2582,34 +2584,54 @@ def generate_team(current_user_email, match_id):
             return jsonify({"message": "User not found"}), 404
         user_id = user_row["id"]
 
-        # 🧠 Get available players for the match
-        cur.execute("SELECT player_name FROM players WHERE match_id = %s", (match_id,))
-        pool = [p["player_name"] for p in cur.fetchall()]
-        if len(pool) < 11:
-            return jsonify({"message": "Not enough players to generate team"}), 400
+        # 🧠 Fetch players for this match with their roles
+        cur.execute("SELECT player_name, role FROM players WHERE match_id = %s", (match_id,))
+        pool = cur.fetchall()
 
-        # 🎲 Generate AI teams
+        # 🛡️ Define smart picking logic
+        def pick_team(pool):
+            batsmen     = [p for p in pool if p['role'] == 'batsman']
+            bowlers     = [p for p in pool if p['role'] == 'bowler']
+            allrounders = [p for p in pool if p['role'] == 'allrounder']
+            keepers     = [p for p in pool if p['role'] == 'keeper']
+
+            # Make sure we have enough players for each role
+            if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
+                return None
+
+            team = (
+                random.sample(batsmen, 4) +
+                random.sample(bowlers, 3) +
+                random.sample(allrounders, 2) +
+                random.sample(keepers, 1)
+            )
+            return [p['player_name'] for p in team]
+
+        # ⚙️ Generate teams
         team_ids = []
         for i in range(num_teams):
-            picked = random.sample(pool, 11)
-            team_name = f"AI Team {i+1}"
+            team_players = pick_team(pool)
+            if not team_players:
+                return jsonify({"message": "Not enough players per role to generate team"}), 400
 
+            team_name = f"AI Team {i+1}"
             cur.execute("""
                 INSERT INTO teams (team_name, players, user_id, contest_id)
                 VALUES (%s, %s, %s, %s)
-            """, (team_name, json.dumps(picked), user_id, contest_id))
+            """, (team_name, json.dumps(team_players), user_id, contest_id))
             db.commit()
             team_ids.append(cur.lastrowid)
 
         return jsonify({
             "success": True,
-            "team_id": team_ids[0],
+            "team_id": team_ids[0],  # Return the first one for immediate viewing
             "message": f"{num_teams} AI team(s) created ✔"
         }), 200
 
     except Exception as e:
         app.logger.exception("🛑 AI team generation failed:")
         return jsonify({"message": "Internal Server Error"}), 500
+
 
 
 
@@ -2736,4 +2758,3 @@ if __name__ == '__main__':
     for rule in app.url_map.iter_rules():
         print(f"{rule.endpoint}: {rule}")
     app.run(debug=True)
-
