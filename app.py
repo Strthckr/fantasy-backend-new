@@ -2566,6 +2566,39 @@ def generate_team(current_user_email, match_id):
     if request.method == 'OPTIONS':
         return '', 204  # CORS preflight support
 
+    def pick_team(pool):
+        import random
+
+        batsmen     = [p for p in pool if p['role'] == 'batsman']
+        bowlers     = [p for p in pool if p['role'] == 'bowler']
+        allrounders = [p for p in pool if p['role'] == 'allrounder']
+        keepers     = [p for p in pool if p['role'] == 'keeper']
+
+        if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
+            return None
+
+        team = (
+            random.sample(batsmen, 4) +
+            random.sample(bowlers, 3) +
+            random.sample(allrounders, 2) +
+            random.sample(keepers, 1)
+        )
+
+        selected_names = set(p['player_name'] for p in team)
+        remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
+        if remaining_pool:
+            team.append(random.choice(remaining_pool))  # Add 11th player
+
+        captain = random.choice(team)
+        vice_candidates = [p for p in team if p != captain]
+        vice_captain = random.choice(vice_candidates) if vice_candidates else captain
+
+        for p in team:
+            p['is_captain'] = (p == captain)
+            p['is_vice_captain'] = (p == vice_captain)
+
+        return team
+
     try:
         import random, json
         data = request.get_json()
@@ -2577,43 +2610,21 @@ def generate_team(current_user_email, match_id):
 
         cur = db.cursor(dictionary=True)
 
-        # 🔐 Get user ID from email
+        # Get user ID
         cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
         user_row = cur.fetchone()
         if not user_row:
             return jsonify({"message": "User not found"}), 404
         user_id = user_row["id"]
 
-        # 🧠 Fetch players with roles for smart generation
+        # Fetch players
         cur.execute("SELECT player_name, role FROM players WHERE match_id = %s", (match_id,))
         pool = cur.fetchall()
 
-        # 🧪 Smarter AI team logic with 11 players total
-        def pick_team(pool):
-            batsmen     = [p for p in pool if p['role'] == 'batsman']
-            bowlers     = [p for p in pool if p['role'] == 'bowler']
-            allrounders = [p for p in pool if p['role'] == 'allrounder']
-            keepers     = [p for p in pool if p['role'] == 'keeper']
+        if not pool:
+            return jsonify({"message": "No players found for this match"}), 404
 
-            if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
-                return None
-
-            team = (
-                random.sample(batsmen, 4) +
-                random.sample(bowlers, 3) +
-                random.sample(allrounders, 2) +
-                random.sample(keepers, 1)
-            )
-
-            already_selected_names = set(p['player_name'] for p in team)
-            remaining_pool = [p for p in pool if p['player_name'] not in already_selected_names]
-
-            if remaining_pool:
-                team.append(random.choice(remaining_pool))  # Add 11th player
-
-            return [p['player_name'] for p in team]
-
-        # 🚀 Generate and insert teams
+        # Generate multiple teams
         team_ids = []
         for i in range(num_teams):
             team_players = pick_team(pool)
@@ -2630,7 +2641,7 @@ def generate_team(current_user_email, match_id):
 
         return jsonify({
             "success": True,
-            "team_id": team_ids[0],
+            "team_id": team_ids[0],  # Return first team ID for redirect/view
             "message": f"{num_teams} AI team(s) created ✔"
         }), 200
 
