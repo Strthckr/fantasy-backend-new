@@ -2620,9 +2620,15 @@ def generate_team(current_user_email, match_id):
         # Fetch players
         cur.execute("SELECT player_name, role FROM players WHERE match_id = %s", (match_id,))
         pool = cur.fetchall()
-
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
+
+        # Get count of existing entries for this user and contest
+        cur.execute("""
+            SELECT COUNT(*) FROM entries
+            WHERE contest_id = %s AND user_id = %s
+        """, (contest_id, user_id))
+        existing_count = cur.fetchone()['COUNT(*)']  # MySQL returns 'COUNT(*)' as key
 
         # Generate multiple teams
         team_ids = []
@@ -2631,25 +2637,32 @@ def generate_team(current_user_email, match_id):
             if not team_players:
                 return jsonify({"message": "Not enough players per role to generate team"}), 400
 
-            team_name = f"AI Team {i+1}"
+            team_name = f"AI Team {existing_count + i + 1}"
             cur.execute("""
                 INSERT INTO teams (team_name, players, user_id, contest_id)
                 VALUES (%s, %s, %s, %s)
             """, (team_name, json.dumps(team_players), user_id, contest_id))
+            team_id = cur.lastrowid
+
+            # Insert into entries so it's visible in frontend
+            cur.execute("""
+                INSERT INTO entries (contest_id, user_id, team_id)
+                VALUES (%s, %s, %s)
+            """, (contest_id, user_id, team_id))
+
             db.commit()
-            team_ids.append(cur.lastrowid)
+            team_ids.append(team_id)
 
         return jsonify({
             "success": True,
             "team_ids": team_ids,
-            "team_id": team_ids[0],  # Return first team ID for redirect/view
+            "team_id": team_ids[0],
             "message": f"{num_teams} AI team(s) created ✔"
         }), 200
 
     except Exception as e:
         app.logger.exception("🛑 AI team generation failed:")
         return jsonify({"message": "Internal Server Error"}), 500
-
 
 
 
