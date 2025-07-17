@@ -2641,6 +2641,7 @@ def generate_team(current_user_email, match_id):
 
         return jsonify({
             "success": True,
+            "team_ids": team_ids,
             "team_id": team_ids[0],  # Return first team ID for redirect/view
             "message": f"{num_teams} AI team(s) created ✔"
         }), 200
