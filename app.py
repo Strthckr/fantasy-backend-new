@@ -2584,18 +2584,17 @@ def generate_team(current_user_email, match_id):
             return jsonify({"message": "User not found"}), 404
         user_id = user_row["id"]
 
-        # 🧠 Fetch players for this match with their roles
+        # 🧠 Fetch players with roles for smart generation
         cur.execute("SELECT player_name, role FROM players WHERE match_id = %s", (match_id,))
         pool = cur.fetchall()
 
-        # 🛡️ Define smart picking logic
+        # 🧪 Smarter AI team logic with 11 players total
         def pick_team(pool):
             batsmen     = [p for p in pool if p['role'] == 'batsman']
             bowlers     = [p for p in pool if p['role'] == 'bowler']
             allrounders = [p for p in pool if p['role'] == 'allrounder']
             keepers     = [p for p in pool if p['role'] == 'keeper']
 
-            # Make sure we have enough players for each role
             if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
                 return None
 
@@ -2605,9 +2604,16 @@ def generate_team(current_user_email, match_id):
                 random.sample(allrounders, 2) +
                 random.sample(keepers, 1)
             )
+
+            already_selected_names = set(p['player_name'] for p in team)
+            remaining_pool = [p for p in pool if p['player_name'] not in already_selected_names]
+
+            if remaining_pool:
+                team.append(random.choice(remaining_pool))  # Add 11th player
+
             return [p['player_name'] for p in team]
 
-        # ⚙️ Generate teams
+        # 🚀 Generate and insert teams
         team_ids = []
         for i in range(num_teams):
             team_players = pick_team(pool)
@@ -2624,7 +2630,7 @@ def generate_team(current_user_email, match_id):
 
         return jsonify({
             "success": True,
-            "team_id": team_ids[0],  # Return the first one for immediate viewing
+            "team_id": team_ids[0],
             "message": f"{num_teams} AI team(s) created ✔"
         }), 200
 
