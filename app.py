@@ -2566,37 +2566,36 @@ def generate_team(current_user_email, match_id):
     if request.method == 'OPTIONS':
         return '', 204  # ✅ Support for CORS preflight
 
-    # 🎯 Internal function: Builds a valid team from the pool
     def pick_team(pool):
-        import random
+        import random, time
         from collections import Counter
 
-        # 🔍 Divide players by role
+        random.seed(f"{time.time_ns()}-{random.random()}")  # 🔄 Unique randomness
+
+        # 🎯 Group players by role
         batsmen     = [p for p in pool if p['role'] == 'batsman']
         bowlers     = [p for p in pool if p['role'] == 'bowler']
         allrounders = [p for p in pool if p['role'] == 'allrounder']
         keepers     = [p for p in pool if p['role'] == 'keeper']
 
-        # ❌ Abort if we can't fulfill minimum role quotas
+        # ❌ Abort if minimum role quotas not met
         if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
             return None
 
-        team_counter = Counter()  # 🧮 Track number of players from each franchise
+        team_counter = Counter()
 
         def select_valid_players(group, required_count):
-            selected = []
-            attempts = 0
+            selected, attempts = [], 0
             while len(selected) < required_count and attempts < 30:
                 player = random.choice(group)
                 team_name = player.get('team_name')
-                if not team_name or team_counter[team_name] < 6:  # ✅ Respect max 6 players per team
+                if not team_name or team_counter[team_name] < 11:  # ✅ Relaxed cap
                     selected.append(player)
                     if team_name:
                         team_counter[team_name] += 1
                 attempts += 1
             return selected
 
-        # ✅ Select players per role with franchise restriction
         team = []
         team += select_valid_players(batsmen, 4)
         team += select_valid_players(bowlers, 3)
@@ -2604,16 +2603,15 @@ def generate_team(current_user_email, match_id):
         team += select_valid_players(keepers, 1)
 
         if len(team) != 10:
-            return None  # ❌ Team is incomplete
+            return None
 
-        # 🧩 Add 11th wildcard player
         selected_names = set(p['player_name'] for p in team)
         remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
         random.shuffle(remaining_pool)
 
         for player in remaining_pool:
             team_name = player.get('team_name')
-            if not team_name or team_counter[team_name] < 4:
+            if not team_name or team_counter[team_name] < 11:
                 team.append(player)
                 if team_name:
                     team_counter[team_name] += 1
@@ -2622,7 +2620,6 @@ def generate_team(current_user_email, match_id):
         if len(team) != 11:
             return None
 
-        # 🏏 Assign captain and vice-captain
         captain = random.choice(team)
         vice_candidates = [p for p in team if p['player_name'] != captain['player_name']]
         vice_captain = random.choice(vice_candidates) if vice_candidates else captain
@@ -2644,58 +2641,49 @@ def generate_team(current_user_email, match_id):
 
         cur = db.cursor(dictionary=True)
 
-        # 👤 Get user ID
         cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
         user_row = cur.fetchone()
         if not user_row:
             return jsonify({"message": "User not found"}), 404
         user_id = user_row["id"]
 
-        # ⚽ Fetch eligible players for the match
         cur.execute("SELECT id, player_name, role, credit_value, team_name FROM players WHERE match_id = %s", (match_id,))
         pool = cur.fetchall()
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
 
-        # 🔎 Count existing entries for this user and contest
         cur.execute("""
             SELECT COUNT(*) FROM entries
             WHERE contest_id = %s AND user_id = %s
         """, (contest_id, user_id))
         existing_count = cur.fetchone()['COUNT(*)']
 
-        # 🧠 Prepare for multiple team generation with uniqueness checks
         existing_hashes = set()
         team_ids = []
 
         for i in range(num_teams):
-            for attempt in range(50):  # 🔁 Give 50 chances to generate a valid unique squad
+            for attempt in range(50):
                 team_players = pick_team(pool)
                 if not team_players:
                     continue
 
-                # 🔐 Hash combination to detect duplicates
                 squad_hash = hash("".join(sorted(p['player_name'] for p in team_players)))
                 if squad_hash in existing_hashes:
                     continue
 
                 existing_hashes.add(squad_hash)
 
-                # 🧾 Ensure frontend fields are properly formatted
                 for p in team_players:
                     p["credit_value"] = float(p["credit_value"])
                     p["player_id"] = p.get("id", None)
 
                 team_name = f"AI Team {existing_count + i + 1}"
-
-                # 💾 Save team in database
                 cur.execute("""
                     INSERT INTO teams (team_name, players, user_id, contest_id)
                     VALUES (%s, %s, %s, %s)
-                """, (team_name, json.dumps(team_players), user_id, contest_id))
+                """, (team_name, json.dumps(team_players, default=str), user_id, contest_id))
                 team_id = cur.lastrowid
 
-                # 🪪 Insert entry record
                 cur.execute("""
                     INSERT INTO entries (contest_id, user_id, team_id)
                     VALUES (%s, %s, %s)
@@ -2706,7 +2694,35 @@ def generate_team(current_user_email, match_id):
                 break
 
             else:
-                app.logger.warning(f"🟡 Skipped duplicate team after 50 tries for user {user_id} in contest {contest_id}")
+                # 🛡️ Fallback logic: force team generation if retries fail
+                fallback_attempts = 0
+                team_players = None
+                while not team_players and fallback_attempts < 100:
+                    team_players = pick_team(pool)
+                    fallback_attempts += 1
+
+                if team_players:
+                    for p in team_players:
+                        p["credit_value"] = float(p["credit_value"])
+                        p["player_id"] = p.get("id", None)
+
+                    team_name = f"Fallback AI Team {existing_count + i + 1}"
+                    cur.execute("""
+                        INSERT INTO teams (team_name, players, user_id, contest_id)
+                        VALUES (%s, %s, %s, %s)
+                    """, (team_name, json.dumps(team_players, default=str), user_id, contest_id))
+                    team_id = cur.lastrowid
+
+                    cur.execute("""
+                        INSERT INTO entries (contest_id, user_id, team_id)
+                        VALUES (%s, %s, %s)
+                    """, (contest_id, user_id, team_id))
+
+                    db.commit()
+                    team_ids.append(team_id)
+                    app.logger.warning(f"⚠️ Fallback AI Team {team_name} created successfully")
+                else:
+                    app.logger.error(f"❌ Fallback team creation failed after 100 attempts")
 
         return jsonify({
             "success": True,
