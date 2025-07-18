@@ -2582,14 +2582,17 @@ def generate_team(current_user_email, match_id):
             return None
 
         team_counter = Counter()
+        selected_names = set()  # ✅ NEW: Track all selected player names
 
         def select_valid_players(group, required_count):
             selected, attempts = [], 0
             while len(selected) < required_count and attempts < 30:
                 player = random.choice(group)
+                name = player['player_name']
                 team_name = player.get('team_name')
-                if not team_name or team_counter[team_name] < 11:  # ✅ Franchise cap relaxed for testing
+                if name not in selected_names and (not team_name or team_counter[team_name] < 11):  # ✅ NEW
                     selected.append(player)
+                    selected_names.add(name)  # ✅ NEW
                     if team_name:
                         team_counter[team_name] += 1
                 attempts += 1
@@ -2604,14 +2607,15 @@ def generate_team(current_user_email, match_id):
         if len(team) != 10:
             return None
 
-        selected_names = set(p['player_name'] for p in team)
         remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
         random.shuffle(remaining_pool)
 
         for player in remaining_pool:
+            name = player['player_name']
             team_name = player.get('team_name')
-            if not team_name or team_counter[team_name] < 11:
+            if name not in selected_names and (not team_name or team_counter[team_name] < 11):  # ✅ NEW
                 team.append(player)
+                selected_names.add(name)  # ✅ NEW
                 if team_name:
                     team_counter[team_name] += 1
                 break
@@ -2627,7 +2631,7 @@ def generate_team(current_user_email, match_id):
             p['is_captain'] = (p['player_name'] == captain['player_name'])
             p['is_vice_captain'] = (p['player_name'] == vice_captain['player_name'])
 
-        # ✅ TEST: Log team composition
+        # ✅ TEST LOG: Confirm final team composition
         import logging
         logging.warning(f"✅ pick_team generated: {[p['player_name'] for p in team]}")
 
@@ -2655,10 +2659,7 @@ def generate_team(current_user_email, match_id):
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
 
-        cur.execute("""
-            SELECT COUNT(*) FROM entries
-            WHERE contest_id = %s AND user_id = %s
-        """, (contest_id, user_id))
+        cur.execute("SELECT COUNT(*) FROM entries WHERE contest_id = %s AND user_id = %s", (contest_id, user_id))
         existing_count = cur.fetchone()['COUNT(*)']
 
         existing_hashes = set()
@@ -2681,23 +2682,19 @@ def generate_team(current_user_email, match_id):
                     p["player_id"] = p.get("id", None)
 
                 team_name = f"AI Team {existing_count + i + 1}"
-                cur.execute("""
-                    INSERT INTO teams (team_name, players, user_id, contest_id)
-                    VALUES (%s, %s, %s, %s)
-                """, (team_name, json.dumps(team_players, default=str), user_id, contest_id))
+                cur.execute("INSERT INTO teams (team_name, players, user_id, contest_id) VALUES (%s, %s, %s, %s)", (
+                    team_name, json.dumps(team_players, default=str), user_id, contest_id))
                 team_id = cur.lastrowid
 
-                cur.execute("""
-                    INSERT INTO entries (contest_id, user_id, team_id)
-                    VALUES (%s, %s, %s)
-                """, (contest_id, user_id, team_id))
+                cur.execute("INSERT INTO entries (contest_id, user_id, team_id) VALUES (%s, %s, %s)",
+                            (contest_id, user_id, team_id))
 
                 db.commit()
                 team_ids.append(team_id)
                 break
 
             else:
-                # ✅ TEST: Fallback logic triggered after 50 failed attempts
+                # ✅ TEST: Guaranteed fallback logic with 100 forced tries
                 app.logger.warning(f"⏳ Fallback triggered for team #{i + 1}")
                 fallback_attempts = 0
                 team_players = None
@@ -2711,16 +2708,12 @@ def generate_team(current_user_email, match_id):
                         p["player_id"] = p.get("id", None)
 
                     team_name = f"Fallback AI Team {existing_count + i + 1}"
-                    cur.execute("""
-                        INSERT INTO teams (team_name, players, user_id, contest_id)
-                        VALUES (%s, %s, %s, %s)
-                    """, (team_name, json.dumps(team_players, default=str), user_id, contest_id))
+                    cur.execute("INSERT INTO teams (team_name, players, user_id, contest_id) VALUES (%s, %s, %s, %s)", (
+                        team_name, json.dumps(team_players, default=str), user_id, contest_id))
                     team_id = cur.lastrowid
 
-                    cur.execute("""
-                        INSERT INTO entries (contest_id, user_id, team_id)
-                        VALUES (%s, %s, %s)
-                    """, (contest_id, user_id, team_id))
+                    cur.execute("INSERT INTO entries (contest_id, user_id, team_id) VALUES (%s, %s, %s)",
+                                (contest_id, user_id, team_id))
 
                     db.commit()
                     team_ids.append(team_id)
@@ -2740,7 +2733,6 @@ def generate_team(current_user_email, match_id):
         traceback.print_exc()
         app.logger.exception("🛑 AI team generation failed:")
         return jsonify({"message": "Internal Server Error"}), 500
-
 
 
 
