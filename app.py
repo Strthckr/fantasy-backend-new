@@ -2618,7 +2618,7 @@ def generate_team(current_user_email, match_id):
         user_id = user_row["id"]
 
         # Fetch players
-        cur.execute("SELECT player_name, role, credit_value FROM players WHERE match_id = %s", (match_id,))
+        cur.execute("SELECT id, player_name, role, credit_value FROM players WHERE match_id = %s", (match_id,))
         pool = cur.fetchall()
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
@@ -2628,7 +2628,7 @@ def generate_team(current_user_email, match_id):
             SELECT COUNT(*) FROM entries
             WHERE contest_id = %s AND user_id = %s
         """, (contest_id, user_id))
-        existing_count = cur.fetchone()['COUNT(*)']  # MySQL returns 'COUNT(*)' as key
+        existing_count = cur.fetchone()['COUNT(*)']
 
         # Generate multiple teams
         team_ids = []
@@ -2636,6 +2636,11 @@ def generate_team(current_user_email, match_id):
             team_players = pick_team(pool)
             if not team_players:
                 return jsonify({"message": "Not enough players per role to generate team"}), 400
+
+            # ✅ Ensure credit_value is float and player_id is added
+            for p in team_players:
+                p["credit_value"] = float(p["credit_value"])
+                p["player_id"] = p.get("id", None)  # optional if needed
 
             team_name = f"AI Team {existing_count + i + 1}"
             cur.execute("""
