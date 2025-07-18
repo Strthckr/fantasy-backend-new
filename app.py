@@ -2574,31 +2574,42 @@ def generate_team(current_user_email, match_id):
         allrounders = [p for p in pool if p['role'] == 'allrounder']
         keepers     = [p for p in pool if p['role'] == 'keeper']
 
-        for attempt in range(10):  # try up to 10 times to find a valid squad
+        for attempt in range(10):  # Try up to 10 times to find a valid squad
             try:
-                team = (
+                raw_team = (
                     random.sample(batsmen, 4) +
                     random.sample(bowlers, 3) +
                     random.sample(allrounders, 2) +
                     random.sample(keepers, 1)
                 )
 
-                selected_names = set(p['player_name'] for p in team)
+                selected_names = set(p['player_name'] for p in raw_team)
                 remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
                 if remaining_pool:
-                    team.append(random.choice(remaining_pool))  # add 11th player
+                    raw_team.append(random.choice(remaining_pool))  # Add 11th player
 
-                total_credit = sum(float(p['credit_value']) for p in team)
+                # Build clean player objects with credit preserved
+                team = []
+                for p in raw_team:
+                    team.append({
+                        'player_name': p['player_name'],
+                        'role': p['role'],
+                        'credit_value': float(p.get('credit_value', 0)),
+                        'is_captain': False,
+                        'is_vice_captain': False
+                    })
+
+                total_credit = sum(p['credit_value'] for p in team)
                 if total_credit > 100:
-                    continue  # try again — budget exceeded
+                    continue  # Try again — budget exceeded
 
+                # Assign captain and vice captain
                 captain = random.choice(team)
                 vice_candidates = [p for p in team if p != captain]
                 vice_captain = random.choice(vice_candidates) if vice_candidates else captain
 
-                for p in team:
-                    p['is_captain'] = (p == captain)
-                    p['is_vice_captain'] = (p == vice_captain)
+                captain['is_captain'] = True
+                vice_captain['is_vice_captain'] = True
 
                 return team
             except Exception:
@@ -2624,7 +2635,11 @@ def generate_team(current_user_email, match_id):
         user_id = user_row["id"]
 
         # Fetch players with credit_value
-        cur.execute("SELECT player_name, role, credit_value FROM players WHERE match_id = %s", (match_id,))
+        cur.execute("""
+            SELECT player_name, role, credit_value
+            FROM players
+            WHERE match_id = %s
+        """, (match_id,))
         pool = cur.fetchall()
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
