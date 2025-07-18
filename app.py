@@ -2566,44 +2566,50 @@ def generate_team(current_user_email, match_id):
     if request.method == 'OPTIONS':
         return '', 204  # CORS preflight support
 
-    def pick_team(pool):
-        import random
+    import random, json
 
+    def pick_team(pool):
         batsmen     = [p for p in pool if p['role'] == 'batsman']
         bowlers     = [p for p in pool if p['role'] == 'bowler']
         allrounders = [p for p in pool if p['role'] == 'allrounder']
         keepers     = [p for p in pool if p['role'] == 'keeper']
 
-        if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
-            return None
+        for attempt in range(10):  # try up to 10 times to find a valid squad
+            try:
+                team = (
+                    random.sample(batsmen, 4) +
+                    random.sample(bowlers, 3) +
+                    random.sample(allrounders, 2) +
+                    random.sample(keepers, 1)
+                )
 
-        team = (
-            random.sample(batsmen, 4) +
-            random.sample(bowlers, 3) +
-            random.sample(allrounders, 2) +
-            random.sample(keepers, 1)
-        )
+                selected_names = set(p['player_name'] for p in team)
+                remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
+                if remaining_pool:
+                    team.append(random.choice(remaining_pool))  # add 11th player
 
-        selected_names = set(p['player_name'] for p in team)
-        remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
-        if remaining_pool:
-            team.append(random.choice(remaining_pool))  # Add 11th player
+                total_credit = sum(float(p['credit_value']) for p in team)
+                if total_credit > 100:
+                    continue  # try again — budget exceeded
 
-        captain = random.choice(team)
-        vice_candidates = [p for p in team if p != captain]
-        vice_captain = random.choice(vice_candidates) if vice_candidates else captain
+                captain = random.choice(team)
+                vice_candidates = [p for p in team if p != captain]
+                vice_captain = random.choice(vice_candidates) if vice_candidates else captain
 
-        for p in team:
-            p['is_captain'] = (p == captain)
-            p['is_vice_captain'] = (p == vice_captain)
+                for p in team:
+                    p['is_captain'] = (p == captain)
+                    p['is_vice_captain'] = (p == vice_captain)
 
-        return team
+                return team
+            except Exception:
+                continue
+
+        return None
 
     try:
-        import random, json
         data = request.get_json()
         contest_id = data.get("contest_id")
-        num_teams = data.get("num_teams", 1)
+        num_teams  = data.get("num_teams", 1)
 
         if not contest_id or not match_id:
             return jsonify({"message": "contest_id and match_id required"}), 400
@@ -2617,34 +2623,33 @@ def generate_team(current_user_email, match_id):
             return jsonify({"message": "User not found"}), 404
         user_id = user_row["id"]
 
-        # Fetch players
-        cur.execute("SELECT player_name, role FROM players WHERE match_id = %s", (match_id,))
+        # Fetch players with credit_value
+        cur.execute("SELECT player_name, role, credit_value FROM players WHERE match_id = %s", (match_id,))
         pool = cur.fetchall()
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
 
-        # Get count of existing entries for this user and contest
+        # Get count of existing entries to name teams uniquely
         cur.execute("""
             SELECT COUNT(*) FROM entries
             WHERE contest_id = %s AND user_id = %s
         """, (contest_id, user_id))
-        existing_count = cur.fetchone()['COUNT(*)']  # MySQL returns 'COUNT(*)' as key
+        existing_count = cur.fetchone()['COUNT(*)']
 
-        # Generate multiple teams
         team_ids = []
         for i in range(num_teams):
             team_players = pick_team(pool)
             if not team_players:
-                return jsonify({"message": "Not enough players per role to generate team"}), 400
+                return jsonify({"message": "Could not generate a valid team within budget"}), 400
 
             team_name = f"AI Team {existing_count + i + 1}"
+
             cur.execute("""
                 INSERT INTO teams (team_name, players, user_id, contest_id)
                 VALUES (%s, %s, %s, %s)
             """, (team_name, json.dumps(team_players), user_id, contest_id))
             team_id = cur.lastrowid
 
-            # Insert into entries so it's visible in frontend
             cur.execute("""
                 INSERT INTO entries (contest_id, user_id, team_id)
                 VALUES (%s, %s, %s)
@@ -2714,11 +2719,13 @@ def user_entries(current_user_email, contest_id):
     cur = db.cursor(dictionary=True)
 
     # Get user ID
-    cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+    cur.execute("SELECT id, username FROM users WHERE email = %s", (current_user_email,))
     user_row = cur.fetchone()
     if not user_row:
         return jsonify({"message": "User not found"}), 404
+
     user_id = user_row["id"]
+    username = user_row["username"]
 
     # Fetch only entries created by this user
     cur.execute("""
@@ -2728,14 +2735,13 @@ def user_entries(current_user_email, contest_id):
             t.players,
             t.total_points,
             e.joined_at,
-            u.username,
+            %s AS username,
             t.id AS team_id
         FROM entries e
         JOIN teams t ON e.team_id = t.id
-        JOIN users u ON e.user_id = u.id
         WHERE e.contest_id = %s AND e.user_id = %s
         ORDER BY e.joined_at DESC
-    """, (contest_id, user_id))
+    """, (username, contest_id, user_id))
 
     rows = cur.fetchall()
     return jsonify({"entries": rows})
