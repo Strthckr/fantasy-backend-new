@@ -2565,39 +2565,56 @@ def user_dashboard(current_user_email):
 def generate_team(current_user_email, match_id):
     if request.method == 'OPTIONS':
         return '', 204  # CORS preflight support
+def pick_team(pool):
+    import random
 
-    def pick_team(pool):
-        import random
+    batsmen     = [p for p in pool if p['role'] == 'batsman']
+    bowlers     = [p for p in pool if p['role'] == 'bowler']
+    allrounders = [p for p in pool if p['role'] == 'allrounder']
+    keepers     = [p for p in pool if p['role'] == 'keeper']
 
-        batsmen     = [p for p in pool if p['role'] == 'batsman']
-        bowlers     = [p for p in pool if p['role'] == 'bowler']
-        allrounders = [p for p in pool if p['role'] == 'allrounder']
-        keepers     = [p for p in pool if p['role'] == 'keeper']
+    for attempt in range(10):
+        try:
+            raw_team = (
+                random.sample(batsmen, 4) +
+                random.sample(bowlers, 3) +
+                random.sample(allrounders, 2) +
+                random.sample(keepers, 1)
+            )
 
-        if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
-            return None
+            selected_names = {p['player_name'] for p in raw_team}
+            remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
+            if remaining_pool:
+                raw_team.append(random.choice(remaining_pool))
 
-        team = (
-            random.sample(batsmen, 4) +
-            random.sample(bowlers, 3) +
-            random.sample(allrounders, 2) +
-            random.sample(keepers, 1)
-        )
+            # ✅ Create a clean copy with credit_value preserved
+            team = []
+            for p in raw_team:
+                team.append({
+                    'player_name': p['player_name'],
+                    'role': p['role'],
+                    'credit_value': float(p.get('credit_value') or 0),
+                    'is_captain': False,
+                    'is_vice_captain': False
+                })
 
-        selected_names = set(p['player_name'] for p in team)
-        remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
-        if remaining_pool:
-            team.append(random.choice(remaining_pool))  # Add 11th player
+            total_credit = sum(p['credit_value'] for p in team)
+            if total_credit > 100:
+                continue  # Budget exceeded
 
-        captain = random.choice(team)
-        vice_candidates = [p for p in team if p != captain]
-        vice_captain = random.choice(vice_candidates) if vice_candidates else captain
+            captain = random.choice(team)
+            vice_candidates = [p for p in team if p != captain]
+            vice_captain = random.choice(vice_candidates) if vice_candidates else captain
 
-        for p in team:
-            p['is_captain'] = (p == captain)
-            p['is_vice_captain'] = (p == vice_captain)
+            captain['is_captain'] = True
+            vice_captain['is_vice_captain'] = True
 
-        return team
+            return team
+        except Exception:
+            continue
+
+    return None
+
 
     try:
         import random, json
@@ -2618,7 +2635,7 @@ def generate_team(current_user_email, match_id):
         user_id = user_row["id"]
 
         # Fetch players
-        cur.execute("SELECT player_name, role FROM players WHERE match_id = %s", (match_id,))
+        cur.execute("SELECT player_name, role, credit_value FROM players WHERE match_id = %s", (match_id,))
         pool = cur.fetchall()
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
