@@ -2562,77 +2562,76 @@ def user_dashboard(current_user_email):
 
 @app.route('/match/<int:match_id>/generate-team', methods=['POST', 'OPTIONS'])
 @token_required
-def pick_team(pool):
-    import random
-    from collections import Counter
+def generate_team(current_user_email, match_id):
+    if request.method == 'OPTIONS':
+        return '', 204  # ✅ Support for CORS preflight
 
-    # ➕ Group players by role
-    batsmen     = [p for p in pool if p['role'] == 'batsman']
-    bowlers     = [p for p in pool if p['role'] == 'bowler']
-    allrounders = [p for p in pool if p['role'] == 'allrounder']
-    keepers     = [p for p in pool if p['role'] == 'keeper']
+    # 🎯 Internal function: Builds a valid team from the pool
+    def pick_team(pool):
+        import random
+        from collections import Counter
 
-    # ⚠️ Check role count requirements
-    if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
-        return None  # Not enough eligible players in the pool
+        # 🔍 Divide players by role
+        batsmen     = [p for p in pool if p['role'] == 'batsman']
+        bowlers     = [p for p in pool if p['role'] == 'bowler']
+        allrounders = [p for p in pool if p['role'] == 'allrounder']
+        keepers     = [p for p in pool if p['role'] == 'keeper']
 
-    # 🧠 We'll use this counter to restrict max 4 players per franchise/team_name
-    team_counter = Counter()
+        # ❌ Abort if we can't fulfill minimum role quotas
+        if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
+            return None
 
-    # 🔁 Helper: select a valid group of players while checking franchise limit
-    def select_valid_players(group, required_count):
-        selected = []
-        attempts = 0
+        team_counter = Counter()  # 🧮 Track number of players from each franchise
 
-        while len(selected) < required_count and attempts < 30:
-            player = random.choice(group)
+        def select_valid_players(group, required_count):
+            selected = []
+            attempts = 0
+            while len(selected) < required_count and attempts < 30:
+                player = random.choice(group)
+                team_name = player.get('team_name')
+                if not team_name or team_counter[team_name] < 4:  # ✅ Respect max 4 players per team
+                    selected.append(player)
+                    if team_name:
+                        team_counter[team_name] += 1
+                attempts += 1
+            return selected
+
+        # ✅ Select players per role with franchise restriction
+        team = []
+        team += select_valid_players(batsmen, 4)
+        team += select_valid_players(bowlers, 3)
+        team += select_valid_players(allrounders, 2)
+        team += select_valid_players(keepers, 1)
+
+        if len(team) != 10:
+            return None  # ❌ Team is incomplete
+
+        # 🧩 Add 11th wildcard player
+        selected_names = set(p['player_name'] for p in team)
+        remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
+        random.shuffle(remaining_pool)
+
+        for player in remaining_pool:
             team_name = player.get('team_name')
             if not team_name or team_counter[team_name] < 4:
-                selected.append(player)
+                team.append(player)
                 if team_name:
                     team_counter[team_name] += 1
-            attempts += 1
+                break
 
-        return selected
+        if len(team) != 11:
+            return None
 
-    # 🎯 Select players for each role with restriction
-    team = []
-    team += select_valid_players(batsmen, 4)
-    team += select_valid_players(bowlers, 3)
-    team += select_valid_players(allrounders, 2)
-    team += select_valid_players(keepers, 1)
+        # 🏏 Assign captain and vice-captain
+        captain = random.choice(team)
+        vice_candidates = [p for p in team if p['player_name'] != captain['player_name']]
+        vice_captain = random.choice(vice_candidates) if vice_candidates else captain
 
-    # ❗ Safety check: make sure we got 10 players so far
-    if len(team) != 10:
-        return None
+        for p in team:
+            p['is_captain'] = (p['player_name'] == captain['player_name'])
+            p['is_vice_captain'] = (p['player_name'] == vice_captain['player_name'])
 
-    # ➕ Add 11th wildcard player from remaining pool, respecting team cap
-    selected_names = set(p['player_name'] for p in team)
-    remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
-    random.shuffle(remaining_pool)
-
-    for player in remaining_pool:
-        team_name = player.get('team_name')
-        if not team_name or team_counter[team_name] < 4:
-            team.append(player)
-            if team_name:
-                team_counter[team_name] += 1
-            break  # ✅ Added successfully
-
-    # ❗ Safety check again
-    if len(team) != 11:
-        return None
-
-    # 🏏 Assign captain and vice captain randomly
-    captain = random.choice(team)
-    vice_candidates = [p for p in team if p['player_name'] != captain['player_name']]
-    vice_captain = random.choice(vice_candidates) if vice_candidates else captain
-
-    for p in team:
-        p['is_captain'] = (p['player_name'] == captain['player_name'])
-        p['is_vice_captain'] = (p['player_name'] == vice_captain['player_name'])
-
-    return team
+        return team
 
     try:
         import random, json
@@ -2645,55 +2644,58 @@ def pick_team(pool):
 
         cur = db.cursor(dictionary=True)
 
-        # Get user ID
+        # 👤 Get user ID
         cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
         user_row = cur.fetchone()
         if not user_row:
             return jsonify({"message": "User not found"}), 404
         user_id = user_row["id"]
 
-        # Fetch players
-        cur.execute("SELECT id, player_name, role, credit_value FROM players WHERE match_id = %s", (match_id,))
+        # ⚽ Fetch eligible players for the match
+        cur.execute("SELECT id, player_name, role, credit_value, team_name FROM players WHERE match_id = %s", (match_id,))
         pool = cur.fetchall()
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
 
-        # Get count of existing entries for this user and contest
+        # 🔎 Count existing entries for this user and contest
         cur.execute("""
             SELECT COUNT(*) FROM entries
             WHERE contest_id = %s AND user_id = %s
         """, (contest_id, user_id))
         existing_count = cur.fetchone()['COUNT(*)']
 
-        # ✅ New logic starts here
+        # 🧠 Prepare for multiple team generation with uniqueness checks
         existing_hashes = set()
         team_ids = []
 
         for i in range(num_teams):
-            for attempt in range(50):
+            for attempt in range(50):  # 🔁 Give 50 chances to generate a valid unique squad
                 team_players = pick_team(pool)
                 if not team_players:
                     continue
 
+                # 🔐 Hash combination to detect duplicates
                 squad_hash = hash("".join(sorted(p['player_name'] for p in team_players)))
                 if squad_hash in existing_hashes:
-                    continue  # Duplicate — retry
+                    continue
 
                 existing_hashes.add(squad_hash)
 
-                # Ensure credit_value is float and player_id is added
+                # 🧾 Ensure frontend fields are properly formatted
                 for p in team_players:
                     p["credit_value"] = float(p["credit_value"])
                     p["player_id"] = p.get("id", None)
 
                 team_name = f"AI Team {existing_count + i + 1}"
+
+                # 💾 Save team in database
                 cur.execute("""
                     INSERT INTO teams (team_name, players, user_id, contest_id)
                     VALUES (%s, %s, %s, %s)
                 """, (team_name, json.dumps(team_players), user_id, contest_id))
                 team_id = cur.lastrowid
 
-                # Insert into entries so it's visible in frontend
+                # 🪪 Insert entry record
                 cur.execute("""
                     INSERT INTO entries (contest_id, user_id, team_id)
                     VALUES (%s, %s, %s)
