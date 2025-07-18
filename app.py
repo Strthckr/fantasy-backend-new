@@ -2589,7 +2589,7 @@ def generate_team(current_user_email, match_id):
             while len(selected) < required_count and attempts < 30:
                 player = random.choice(group)
                 team_name = player.get('team_name')
-                if not team_name or team_counter[team_name] < 4:  # ✅ Respect max 4 players per team
+                if not team_name or team_counter[team_name] < 6:  # ✅ Respect max 6 players per team
                     selected.append(player)
                     if team_name:
                         team_counter[team_name] += 1
