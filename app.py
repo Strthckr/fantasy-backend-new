@@ -2590,12 +2590,12 @@ def generate_team(current_user_email, match_id):
             team.append(random.choice(remaining_pool))  # Add 11th player
 
         captain = random.choice(team)
-        vice_candidates = [p for p in team if p != captain]
+        vice_candidates = [p for p in team if p['player_name'] != captain['player_name']]
         vice_captain = random.choice(vice_candidates) if vice_candidates else captain
 
         for p in team:
-            p['is_captain'] = (p == captain)
-            p['is_vice_captain'] = (p == vice_captain)
+            p['is_captain'] = (p['player_name'] == captain['player_name'])
+            p['is_vice_captain'] = (p['player_name'] == vice_captain['player_name'])
 
         return team
 
@@ -2618,7 +2618,7 @@ def generate_team(current_user_email, match_id):
         user_id = user_row["id"]
 
         # Fetch players
-        cur.execute("SELECT player_name, role FROM players WHERE match_id = %s", (match_id,))
+        cur.execute("SELECT player_name, role, credit_value FROM players WHERE match_id = %s", (match_id,))
         pool = cur.fetchall()
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
