@@ -2708,26 +2708,38 @@ def join_multiple_teams(current_user_email, contest_id):
 
 
 
-@app.route('/user/contest/<int:contest_id>/entries', methods=['GET', 'OPTIONS'])
+@app.route('/user/contest/<int:contest_id>/entries')
 @token_required
-def user_contest_entries(current_user_email, contest_id):
+def user_entries(current_user_email, contest_id):
     cur = db.cursor(dictionary=True)
+
+    # Get user ID
+    cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+    user_row = cur.fetchone()
+    if not user_row:
+        return jsonify({"message": "User not found"}), 404
+    user_id = user_row["id"]
+
+    # Fetch only entries created by this user
     cur.execute("""
-        SELECT 
+        SELECT
             e.id,
-            e.team_id,
-            u.username,
             t.team_name,
-            t.total_points,
             t.players,
-            e.joined_at
+            t.total_points,
+            e.joined_at,
+            u.username,
+            t.id AS team_id
         FROM entries e
         JOIN teams t ON e.team_id = t.id
         JOIN users u ON e.user_id = u.id
-        WHERE e.contest_id = %s
+        WHERE e.contest_id = %s AND e.user_id = %s
         ORDER BY e.joined_at DESC
-    """, (contest_id,))
-    return jsonify({ "entries": cur.fetchall() }), 200
+    """, (contest_id, user_id))
+
+    rows = cur.fetchall()
+    return jsonify({"entries": rows})
+
 
 
 
