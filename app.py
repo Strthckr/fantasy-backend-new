@@ -2562,42 +2562,77 @@ def user_dashboard(current_user_email):
 
 @app.route('/match/<int:match_id>/generate-team', methods=['POST', 'OPTIONS'])
 @token_required
-def generate_team(current_user_email, match_id):
-    if request.method == 'OPTIONS':
-        return '', 204  # CORS preflight support
+def pick_team(pool):
+    import random
+    from collections import Counter
 
-    def pick_team(pool):
-        import random
+    # ➕ Group players by role
+    batsmen     = [p for p in pool if p['role'] == 'batsman']
+    bowlers     = [p for p in pool if p['role'] == 'bowler']
+    allrounders = [p for p in pool if p['role'] == 'allrounder']
+    keepers     = [p for p in pool if p['role'] == 'keeper']
 
-        batsmen     = [p for p in pool if p['role'] == 'batsman']
-        bowlers     = [p for p in pool if p['role'] == 'bowler']
-        allrounders = [p for p in pool if p['role'] == 'allrounder']
-        keepers     = [p for p in pool if p['role'] == 'keeper']
+    # ⚠️ Check role count requirements
+    if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
+        return None  # Not enough eligible players in the pool
 
-        if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
-            return None
+    # 🧠 We'll use this counter to restrict max 4 players per franchise/team_name
+    team_counter = Counter()
 
-        team = (
-            random.sample(batsmen, 4) +
-            random.sample(bowlers, 3) +
-            random.sample(allrounders, 2) +
-            random.sample(keepers, 1)
-        )
+    # 🔁 Helper: select a valid group of players while checking franchise limit
+    def select_valid_players(group, required_count):
+        selected = []
+        attempts = 0
 
-        selected_names = set(p['player_name'] for p in team)
-        remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
-        if remaining_pool:
-            team.append(random.choice(remaining_pool))  # Add 11th player
+        while len(selected) < required_count and attempts < 30:
+            player = random.choice(group)
+            team_name = player.get('team_name')
+            if not team_name or team_counter[team_name] < 4:
+                selected.append(player)
+                if team_name:
+                    team_counter[team_name] += 1
+            attempts += 1
 
-        captain = random.choice(team)
-        vice_candidates = [p for p in team if p['player_name'] != captain['player_name']]
-        vice_captain = random.choice(vice_candidates) if vice_candidates else captain
+        return selected
 
-        for p in team:
-            p['is_captain'] = (p['player_name'] == captain['player_name'])
-            p['is_vice_captain'] = (p['player_name'] == vice_captain['player_name'])
+    # 🎯 Select players for each role with restriction
+    team = []
+    team += select_valid_players(batsmen, 4)
+    team += select_valid_players(bowlers, 3)
+    team += select_valid_players(allrounders, 2)
+    team += select_valid_players(keepers, 1)
 
-        return team
+    # ❗ Safety check: make sure we got 10 players so far
+    if len(team) != 10:
+        return None
+
+    # ➕ Add 11th wildcard player from remaining pool, respecting team cap
+    selected_names = set(p['player_name'] for p in team)
+    remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
+    random.shuffle(remaining_pool)
+
+    for player in remaining_pool:
+        team_name = player.get('team_name')
+        if not team_name or team_counter[team_name] < 4:
+            team.append(player)
+            if team_name:
+                team_counter[team_name] += 1
+            break  # ✅ Added successfully
+
+    # ❗ Safety check again
+    if len(team) != 11:
+        return None
+
+    # 🏏 Assign captain and vice captain randomly
+    captain = random.choice(team)
+    vice_candidates = [p for p in team if p['player_name'] != captain['player_name']]
+    vice_captain = random.choice(vice_candidates) if vice_candidates else captain
+
+    for p in team:
+        p['is_captain'] = (p['player_name'] == captain['player_name'])
+        p['is_vice_captain'] = (p['player_name'] == vice_captain['player_name'])
+
+    return team
 
     try:
         import random, json
