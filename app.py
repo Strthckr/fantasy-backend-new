@@ -2578,7 +2578,6 @@ def generate_team(current_user_email, match_id):
         allrounders = [p for p in pool if p['role'] == 'allrounder']
         keepers     = [p for p in pool if p['role'] == 'keeper']
 
-        # ❌ Abort if minimum role quotas not met
         if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
             return None
 
@@ -2589,7 +2588,7 @@ def generate_team(current_user_email, match_id):
             while len(selected) < required_count and attempts < 30:
                 player = random.choice(group)
                 team_name = player.get('team_name')
-                if not team_name or team_counter[team_name] < 11:  # ✅ Relaxed cap
+                if not team_name or team_counter[team_name] < 11:  # ✅ Franchise cap relaxed for testing
                     selected.append(player)
                     if team_name:
                         team_counter[team_name] += 1
@@ -2627,6 +2626,10 @@ def generate_team(current_user_email, match_id):
         for p in team:
             p['is_captain'] = (p['player_name'] == captain['player_name'])
             p['is_vice_captain'] = (p['player_name'] == vice_captain['player_name'])
+
+        # ✅ TEST: Log team composition
+        import logging
+        logging.warning(f"✅ pick_team generated: {[p['player_name'] for p in team]}")
 
         return team
 
@@ -2694,7 +2697,8 @@ def generate_team(current_user_email, match_id):
                 break
 
             else:
-                # 🛡️ Fallback logic: force team generation if retries fail
+                # ✅ TEST: Fallback logic triggered after 50 failed attempts
+                app.logger.warning(f"⏳ Fallback triggered for team #{i + 1}")
                 fallback_attempts = 0
                 team_players = None
                 while not team_players and fallback_attempts < 100:
@@ -2720,9 +2724,9 @@ def generate_team(current_user_email, match_id):
 
                     db.commit()
                     team_ids.append(team_id)
-                    app.logger.warning(f"⚠️ Fallback AI Team {team_name} created successfully")
+                    app.logger.warning(f"✅ Fallback AI Team {team_name} saved")
                 else:
-                    app.logger.error(f"❌ Fallback team creation failed after 100 attempts")
+                    app.logger.error(f"❌ Fallback failed after 100 attempts — no team saved")
 
         return jsonify({
             "success": True,
