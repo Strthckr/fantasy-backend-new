@@ -2630,42 +2630,57 @@ def generate_team(current_user_email, match_id):
         """, (contest_id, user_id))
         existing_count = cur.fetchone()['COUNT(*)']
 
-        # Generate multiple teams
+        # ✅ New logic starts here
+        existing_hashes = set()
         team_ids = []
+
         for i in range(num_teams):
-            team_players = pick_team(pool)
-            if not team_players:
-                return jsonify({"message": "Not enough players per role to generate team"}), 400
+            for attempt in range(50):
+                team_players = pick_team(pool)
+                if not team_players:
+                    continue
 
-            # ✅ Ensure credit_value is float and player_id is added
-            for p in team_players:
-                p["credit_value"] = float(p["credit_value"])
-                p["player_id"] = p.get("id", None)  # optional if needed
+                squad_hash = hash("".join(sorted(p['player_name'] for p in team_players)))
+                if squad_hash in existing_hashes:
+                    continue  # Duplicate — retry
 
-            team_name = f"AI Team {existing_count + i + 1}"
-            cur.execute("""
-                INSERT INTO teams (team_name, players, user_id, contest_id)
-                VALUES (%s, %s, %s, %s)
-            """, (team_name, json.dumps(team_players), user_id, contest_id))
-            team_id = cur.lastrowid
+                existing_hashes.add(squad_hash)
 
-            # Insert into entries so it's visible in frontend
-            cur.execute("""
-                INSERT INTO entries (contest_id, user_id, team_id)
-                VALUES (%s, %s, %s)
-            """, (contest_id, user_id, team_id))
+                # Ensure credit_value is float and player_id is added
+                for p in team_players:
+                    p["credit_value"] = float(p["credit_value"])
+                    p["player_id"] = p.get("id", None)
 
-            db.commit()
-            team_ids.append(team_id)
+                team_name = f"AI Team {existing_count + i + 1}"
+                cur.execute("""
+                    INSERT INTO teams (team_name, players, user_id, contest_id)
+                    VALUES (%s, %s, %s, %s)
+                """, (team_name, json.dumps(team_players), user_id, contest_id))
+                team_id = cur.lastrowid
+
+                # Insert into entries so it's visible in frontend
+                cur.execute("""
+                    INSERT INTO entries (contest_id, user_id, team_id)
+                    VALUES (%s, %s, %s)
+                """, (contest_id, user_id, team_id))
+
+                db.commit()
+                team_ids.append(team_id)
+                break
+
+            else:
+                app.logger.warning(f"🟡 Skipped duplicate team after 50 tries for user {user_id} in contest {contest_id}")
 
         return jsonify({
             "success": True,
             "team_ids": team_ids,
-            "team_id": team_ids[0],
-            "message": f"{num_teams} AI team(s) created ✔"
+            "team_id": team_ids[0] if team_ids else None,
+            "message": f"{len(team_ids)} AI team(s) created ✔"
         }), 200
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         app.logger.exception("🛑 AI team generation failed:")
         return jsonify({"message": "Internal Server Error"}), 500
 
