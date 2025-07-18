@@ -2564,7 +2564,7 @@ def user_dashboard(current_user_email):
 @token_required
 def generate_team(current_user_email, match_id):
     if request.method == 'OPTIONS':
-        return '', 204  # CORS preflight
+        return '', 204  # CORS preflight support
 
     def pick_team(pool):
         import random
@@ -2584,19 +2584,18 @@ def generate_team(current_user_email, match_id):
             random.sample(keepers, 1)
         )
 
-        # Add 11th player
         selected_names = set(p['player_name'] for p in team)
         remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
         if remaining_pool:
-            team.append(random.choice(remaining_pool))
+            team.append(random.choice(remaining_pool))  # Add 11th player
 
         captain = random.choice(team)
         vice_candidates = [p for p in team if p != captain]
         vice_captain = random.choice(vice_candidates) if vice_candidates else captain
 
         for p in team:
-            p['is_captain'] = (p['player_name'] == captain['player_name'])
-            p['is_vice_captain'] = (p['player_name'] == vice_captain['player_name'])
+            p['is_captain'] = (p == captain)
+            p['is_vice_captain'] = (p == vice_captain)
 
         return team
 
@@ -2618,18 +2617,21 @@ def generate_team(current_user_email, match_id):
             return jsonify({"message": "User not found"}), 404
         user_id = user_row["id"]
 
-        # ✅ Fetch players (with credit value now)
-        cur.execute("SELECT player_name, role, credit_value FROM players WHERE match_id = %s", (match_id,))
+        # Fetch players
+        cur.execute("SELECT player_name, role FROM players WHERE match_id = %s", (match_id,))
         pool = cur.fetchall()
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
 
-        # Check how many entries already exist
-        cur.execute("SELECT COUNT(*) FROM entries WHERE contest_id = %s AND user_id = %s", (contest_id, user_id))
-        existing_count = cur.fetchone()['COUNT(*)']
+        # Get count of existing entries for this user and contest
+        cur.execute("""
+            SELECT COUNT(*) FROM entries
+            WHERE contest_id = %s AND user_id = %s
+        """, (contest_id, user_id))
+        existing_count = cur.fetchone()['COUNT(*)']  # MySQL returns 'COUNT(*)' as key
 
+        # Generate multiple teams
         team_ids = []
-
         for i in range(num_teams):
             team_players = pick_team(pool)
             if not team_players:
@@ -2642,12 +2644,13 @@ def generate_team(current_user_email, match_id):
             """, (team_name, json.dumps(team_players), user_id, contest_id))
             team_id = cur.lastrowid
 
+            # Insert into entries so it's visible in frontend
             cur.execute("""
                 INSERT INTO entries (contest_id, user_id, team_id)
                 VALUES (%s, %s, %s)
             """, (contest_id, user_id, team_id))
-            db.commit()
 
+            db.commit()
             team_ids.append(team_id)
 
         return jsonify({
