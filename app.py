@@ -2565,15 +2565,14 @@ def user_dashboard(current_user_email):
 @token_required
 def generate_team(current_user_email, match_id):
     if request.method == 'OPTIONS':
-        return '', 204  # ✅ CORS preflight support
+        return '', 204
 
-    def pick_team(pool):
+    def pick_team(pool, must_have=[]):
         import random, time
         from collections import Counter
 
-        random.seed(f"{time.time_ns()}-{random.random()}")  # 🔄 Unique seed
+        random.seed(f"{time.time_ns()}-{random.random()}")
 
-        # 🎯 Group players by role
         batsmen     = [p for p in pool if p['role'] == 'batsman']
         bowlers     = [p for p in pool if p['role'] == 'bowler']
         allrounders = [p for p in pool if p['role'] == 'allrounder']
@@ -2584,6 +2583,15 @@ def generate_team(current_user_email, match_id):
 
         team_counter = Counter()
         selected_names = set()
+
+        team = []
+        for name in must_have:
+            match = next((p for p in pool if p['player_name'].lower() == name.lower()), None)
+            if match and match['player_name'] not in selected_names:
+                team.append(match)
+                selected_names.add(match['player_name'])
+                if match.get('team_name'):
+                    team_counter[match['team_name']] += 1
 
         def select_valid_players(group, required_count):
             selected, attempts = [], 0
@@ -2599,13 +2607,12 @@ def generate_team(current_user_email, match_id):
                 attempts += 1
             return selected
 
-        team = []
         team += select_valid_players(batsmen, 4)
         team += select_valid_players(bowlers, 3)
         team += select_valid_players(allrounders, 2)
         team += select_valid_players(keepers, 1)
 
-        if len(team) != 10:
+        if len(team) < 10:
             return None
 
         remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
@@ -2632,10 +2639,8 @@ def generate_team(current_user_email, match_id):
             p['is_captain'] = (p['player_name'] == captain['player_name'])
             p['is_vice_captain'] = (p['player_name'] == vice_captain['player_name'])
 
-        # ✅ Log team composition
         import logging
         logging.warning(f"✅ pick_team generated: {[p['player_name'] for p in team]}")
-
         return team
 
     try:
@@ -2643,6 +2648,8 @@ def generate_team(current_user_email, match_id):
         data = request.get_json()
         contest_id = data.get("contest_id")
         num_teams = data.get("num_teams", 1)
+        must_have_raw = data.get("must_have", [])
+        must_have = [name.strip() for name in must_have_raw if name.strip()]
 
         if not contest_id or not match_id:
             return jsonify({"message": "contest_id and match_id required"}), 400
@@ -2671,7 +2678,7 @@ def generate_team(current_user_email, match_id):
 
         for i in range(num_teams):
             for attempt in range(50):
-                team_players = pick_team(pool)
+                team_players = pick_team(pool, must_have=must_have)
                 if not team_players:
                     continue
 
@@ -2685,26 +2692,14 @@ def generate_team(current_user_email, match_id):
                     p["credit_value"] = float(p["credit_value"])
                     p["player_id"] = p.get("id", None)
 
-                # ✅ Calculate strength score
                 strength = sum(p["credit_value"] for p in team_players)
-                strength += 2  # Optional captain bonus
-
-                # ✅ Classify rating
-                if strength > 102:
-                    rating = "🔥 Aggressive"
-                elif strength >= 90:
-                    rating = "⭐ Balanced"
-                else:
-                    rating = "⚖️ Defensive"
-
-                # ✅ Log the classification
-                app.logger.warning(f"📊 Team Strength: {strength} → {rating}")
+                strength += 2
 
                 team_name = f"AI Team {existing_count + i + 1}"
                 cur.execute("""
-                    INSERT INTO teams (team_name, players, user_id, contest_id)
-                    VALUES (%s, %s, %s, %s)
-                """, (team_name, json.dumps(team_players, default=str), user_id, contest_id))
+                    INSERT INTO teams (team_name, players, user_id, contest_id, strength_score)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (team_name, json.dumps(team_players, default=str), user_id, contest_id, strength))
                 team_id = cur.lastrowid
 
                 cur.execute("""
@@ -2716,11 +2711,10 @@ def generate_team(current_user_email, match_id):
                 break
 
             else:
-                # 🛡️ Fallback logic
                 fallback_attempts = 0
                 team_players = None
                 while not team_players and fallback_attempts < 100:
-                    team_players = pick_team(pool)
+                    team_players = pick_team(pool, must_have=must_have)
                     fallback_attempts += 1
 
                 if team_players:
@@ -2728,24 +2722,14 @@ def generate_team(current_user_email, match_id):
                         p["credit_value"] = float(p["credit_value"])
                         p["player_id"] = p.get("id", None)
 
-                    # ✅ Calculate strength score for fallback
                     strength = sum(p["credit_value"] for p in team_players)
                     strength += 2
 
-                    if strength > 102:
-                        rating = "🔥 Aggressive"
-                    elif strength >= 90:
-                        rating = "⭐ Balanced"
-                    else:
-                        rating = "⚖️ Defensive"
-
-                    app.logger.warning(f"📊 Fallback Team Strength: {strength} → {rating}")
-
                     team_name = f"Fallback AI Team {existing_count + i + 1}"
                     cur.execute("""
-                        INSERT INTO teams (team_name, players, user_id, contest_id)
-                        VALUES (%s, %s, %s, %s)
-                    """, (team_name, json.dumps(team_players, default=str), user_id, contest_id))
+                        INSERT INTO teams (team_name, players, user_id, contest_id, strength_score)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (team_name, json.dumps(team_players, default=str), user_id, contest_id, strength))
                     team_id = cur.lastrowid
 
                     cur.execute("""
@@ -2756,17 +2740,16 @@ def generate_team(current_user_email, match_id):
                     team_ids.append(team_id)
                     app.logger.warning(f"✅ Fallback AI Team {team_name} saved")
                 else:
-                    app.logger.error(f"❌ Fallback failed after 100 attempts — no team saved")
+                    app.logger.error("❌ Fallback failed — no team saved")
 
-        db.commit()  # ✅ Batch commit
+        db.commit()
 
         return jsonify({
             "success": True,
             "team_ids": team_ids,
             "team_id": team_ids[0] if team_ids else None,
             "message": f"{len(team_ids)} AI team(s) created ✔",
-            "last_team_strength": strength,
-            "last_team_rating": rating
+            "last_team_strength": strength
         }), 200
 
     except Exception as e:
