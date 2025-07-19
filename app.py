@@ -2567,9 +2567,12 @@ def generate_team(current_user_email, match_id):
     if request.method == 'OPTIONS':
         return '', 204
 
-    def pick_team(pool, must_have=[]):
-        import random, time
-        from collections import Counter
+        def pick_team(pool, must_have=[]):
+            import random
+            import time
+            import logging
+            from collections import Counter
+
 
         logging.warning(f"➡️ Must-have: {must_have}")
         logging.warning(f"➡️ Pool roles: Batsmen={len(batsmen)}, Bowlers={len(bowlers)}, Allrounders={len(allrounders)}, Keepers={len(keepers)}")
