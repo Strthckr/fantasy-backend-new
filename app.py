@@ -2704,7 +2704,7 @@ def generate_team(current_user_email, match_id):
 
                 team_name = f"AI Team {existing_count + i + 1}"
                 cur.execute("INSERT INTO teams (team_name, players, user_id, contest_id, strength_score, rating) VALUES (%s, %s, %s, %s, %s, %s)",
-                            (team_name, json.dumps(team_players, default=str), user_id, contest_id))
+                            (team_name, json.dumps(team_players, default=str), user_id, contest_id, strength, rating))
                 team_id = cur.lastrowid
 
                 cur.execute("INSERT INTO entries (contest_id, user_id, team_id) VALUES (%s, %s, %s)",
