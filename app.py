@@ -2567,64 +2567,23 @@ def user_dashboard(current_user_email):
 def generate_team(current_user_email, match_id):
     if request.method == 'OPTIONS':
         return '', 204  # ✅ CORS preflight support
+def pick_team(pool, style="balanced"):
+    import random, time
+    from collections import Counter
 
-    def pick_team(pool, style="balanced"):  # ✅ Accept style here
-        import random, time
-        from collections import Counter
+    random.seed(f"{time.time_ns()}-{random.random()}")  # 🔄 Unique seed
 
-        random.seed(f"{time.time_ns()}-{random.random()}")  # 🔄 Unique seed
+    # ✅ Apply style logic before team building
+    if style == "aggressive":
+        pool = sorted(pool, key=lambda p: float(p['credit_value']), reverse=True)
 
-        # 🎯 Group players by role
-        batsmen     = [p for p in pool if p['role'] == 'batsman']
-        bowlers     = [p for p in pool if p['role'] == 'bowler']
-        allrounders = [p for p in pool if p['role'] == 'allrounder']
-        keepers     = [p for p in pool if p['role'] == 'keeper']
-
-        if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
-            return None
-
-        team_counter = Counter()
-        selected_names = set()
-
-        def select_valid_players(group, required_count):
-            selected, attempts = [], 0
-            while len(selected) < required_count and attempts < 30:
-                player = random.choice(group)
-                name = player['player_name']
-                team_name = player.get('team_name')
-                if name not in selected_names and (not team_name or team_counter[team_name] < 11):
-                    selected.append(player)
-                    selected_names.add(name)
-                    if team_name:
-                        team_counter[team_name] += 1
-                attempts += 1
-            return selected
-
-        team = []
-        team += select_valid_players(batsmen, 4)
-        team += select_valid_players(bowlers, 3)
-        team += select_valid_players(allrounders, 2)
-        team += select_valid_players(keepers, 1)
-
-        if len(team) != 10:
-            return None
-
-        remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
-        random.shuffle(remaining_pool)
-
-        for player in remaining_pool:
-            name = player['player_name']
-            team_name = player.get('team_name')
-            if name not in selected_names and (not team_name or team_counter[team_name] < 11):
-                team.append(player)
-                selected_names.add(name)
-                if team_name:
-                    team_counter[team_name] += 1
-                break
-
+    elif style == "wild":
+        random.shuffle(pool)
+        team = pool[:11] if len(pool) >= 11 else []
         if len(team) != 11:
             return None
 
+        # Pick captain & vice
         captain = random.choice(team)
         vice_candidates = [p for p in team if p['player_name'] != captain['player_name']]
         vice_captain = random.choice(vice_candidates) if vice_candidates else captain
@@ -2634,9 +2593,72 @@ def generate_team(current_user_email, match_id):
             p['is_vice_captain'] = (p['player_name'] == vice_captain['player_name'])
 
         import logging
-        logging.warning(f"✅ pick_team generated: {[p['player_name'] for p in team]}")
-
+        logging.warning(f"✅ pick_team (wild) generated: {[p['player_name'] for p in team]}")
         return team
+
+    # 🎯 Balanced Mode Starts Here
+    batsmen     = [p for p in pool if p['role'] == 'batsman']
+    bowlers     = [p for p in pool if p['role'] == 'bowler']
+    allrounders = [p for p in pool if p['role'] == 'allrounder']
+    keepers     = [p for p in pool if p['role'] == 'keeper']
+
+    if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
+        return None
+
+    team_counter = Counter()
+    selected_names = set()
+
+    def select_valid_players(group, required_count):
+        selected, attempts = [], 0
+        while len(selected) < required_count and attempts < 30:
+            player = random.choice(group)
+            name = player['player_name']
+            team_name = player.get('team_name')
+            if name not in selected_names and (not team_name or team_counter[team_name] < 11):
+                selected.append(player)
+                selected_names.add(name)
+                if team_name:
+                    team_counter[team_name] += 1
+            attempts += 1
+        return selected
+
+    team = []
+    team += select_valid_players(batsmen, 4)
+    team += select_valid_players(bowlers, 3)
+    team += select_valid_players(allrounders, 2)
+    team += select_valid_players(keepers, 1)
+
+    if len(team) != 10:
+        return None
+
+    remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
+    random.shuffle(remaining_pool)
+
+    for player in remaining_pool:
+        name = player['player_name']
+        team_name = player.get('team_name')
+        if name not in selected_names and (not team_name or team_counter[team_name] < 11):
+            team.append(player)
+            selected_names.add(name)
+            if team_name:
+                team_counter[team_name] += 1
+            break
+
+    if len(team) != 11:
+        return None
+
+    captain = random.choice(team)
+    vice_candidates = [p for p in team if p['player_name'] != captain['player_name']]
+    vice_captain = random.choice(vice_candidates) if vice_candidates else captain
+
+    for p in team:
+        p['is_captain'] = (p['player_name'] == captain['player_name'])
+        p['is_vice_captain'] = (p['player_name'] == vice_captain['player_name'])
+
+    import logging
+    logging.warning(f"✅ pick_team ({style}) generated: {[p['player_name'] for p in team]}")
+
+    return team
 
     try:
         import random, json
