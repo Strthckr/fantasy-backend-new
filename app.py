@@ -2766,37 +2766,21 @@ def get_players(current_user_email, match_id):
     try:
         cur = db.cursor()
         cur.execute("""
-          SELECT id, player_name
+          SELECT id, player_name, role
           FROM players
           WHERE match_id = %s
         """, (match_id,))
-        players = [{"id":r[0], "player_name":r[1]} for r in cur.fetchall()]
+        players = [
+            {
+                "id": r[0],
+                "player_name": r[1],
+                "role": r[2]
+            } for r in cur.fetchall()
+        ]
         return jsonify({"players": players}), 200
     except Exception as e:
         app.logger.exception(e)
-        return jsonify({"message":"Failed to load players"}), 500
-
-@app.route('/contest/<int:contest_id>/join-teams', methods=['POST'])
-@token_required
-def join_multiple_teams(current_user_email, contest_id):
-    data = request.json
-    team_ids = data.get("team_ids", [])
-
-    cur = db.cursor()
-    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
-    user = cur.fetchone()
-    if not user:
-        return jsonify({"message":"User not found"}), 404
-    uid = user[0]
-
-    for tid in team_ids:
-        cur.execute("SELECT COUNT(*) FROM user_contests WHERE user_id=%s AND contest_id=%s", (uid, contest_id))
-        already = cur.fetchone()[0]
-        if already == 0:
-            cur.execute("INSERT INTO user_contests (user_id, contest_id) VALUES (%s, %s)", (uid, contest_id))
-    db.commit()
-
-    return jsonify({"message":"Teams joined successfully"})
+        return jsonify({"message": "Failed to load players"}), 500
 
 
 
