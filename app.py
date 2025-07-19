@@ -2687,8 +2687,23 @@ def generate_team(current_user_email, match_id):
                     p["credit_value"] = float(p["credit_value"])
                     p["player_id"] = p.get("id", None)
 
+                # ✅ Calculate strength score
+                strength = sum(p["credit_value"] for p in team_players)
+                strength += 2
+
+                # ✅ Classify rating
+                if strength > 102:
+                    rating = "🔥 Aggressive"
+                elif strength >= 90:
+                    rating = "⭐ Balanced"
+                else:
+                    rating = "⚖️ Defensive"
+
+                app.logger.warning(f"📊 Team Strength: {strength} → {rating}")  
+                    
+
                 team_name = f"AI Team {existing_count + i + 1}"
-                cur.execute("INSERT INTO teams (team_name, players, user_id, contest_id) VALUES (%s, %s, %s, %s)",
+                cur.execute("INSERT INTO teams (team_name, players, user_id, contest_id, strength_score, rating) VALUES (%s, %s, %s, %s, %s, %s)",
                             (team_name, json.dumps(team_players, default=str), user_id, contest_id))
                 team_id = cur.lastrowid
 
@@ -2729,7 +2744,9 @@ def generate_team(current_user_email, match_id):
             "success": True,
             "team_ids": team_ids,
             "team_id": team_ids[0] if team_ids else None,
-            "message": f"{len(team_ids)} AI team(s) created ✔"
+            "message": f"{len(team_ids)} AI team(s) created ✔",
+            "last_team_strength": strength,
+            "last_team_rating": rating
         }), 200
 
     except Exception as e:
