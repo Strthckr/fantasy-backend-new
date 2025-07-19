@@ -11,8 +11,6 @@ from dotenv import load_dotenv
 import os
 import bcrypt
 import traceback
-import random, time
-
 
 # ─── LOAD ENVIRONMENT VARIABLES ────────────────────────────────────────────────
 # Load variables from a .env file (good for DB credentials, secret keys, etc.)
@@ -2570,33 +2568,23 @@ def generate_team(current_user_email, match_id):
     if request.method == 'OPTIONS':
         return '', 204  # ✅ CORS preflight support
 
-    def pick_team(pool, style="balanced"):
+    def pick_team(pool, style="balanced"):  # ✅ Accept style here
         import random, time
-    from collections import Counter
+        from collections import Counter
 
-    random.seed(f"{time.time_ns()}-{random.random()}")  # 🔄 Unique seed
-
-    # Wildcard Mode — pick any 11 random players
-    if style == "wild":
-        random.shuffle(pool)
-        return pool[:11] if len(pool) >= 11 else None
-
-    # Aggressive Mode — sort by highest credit value
-    if style == "aggressive":
-        pool = sorted(pool, key=lambda p: float(p['credit_value']), reverse=True)
+        random.seed(f"{time.time_ns()}-{random.random()}")  # 🔄 Unique seed
 
         # 🎯 Group players by role
         batsmen     = [p for p in pool if p['role'] == 'batsman']
         bowlers     = [p for p in pool if p['role'] == 'bowler']
         allrounders = [p for p in pool if p['role'] == 'allrounder']
         keepers     = [p for p in pool if p['role'] == 'keeper']
-        team_players = pick_team(pool, style=style)  # ✅ Pass the mode to your function
 
         if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
             return None
 
         team_counter = Counter()
-        selected_names = set()  # ✅ Prevent duplicate players
+        selected_names = set()
 
         def select_valid_players(group, required_count):
             selected, attempts = [], 0
@@ -2645,7 +2633,6 @@ def generate_team(current_user_email, match_id):
             p['is_captain'] = (p['player_name'] == captain['player_name'])
             p['is_vice_captain'] = (p['player_name'] == vice_captain['player_name'])
 
-        # ✅ Log team composition
         import logging
         logging.warning(f"✅ pick_team generated: {[p['player_name'] for p in team]}")
 
@@ -2655,14 +2642,14 @@ def generate_team(current_user_email, match_id):
         import random, json
 
         data = request.get_json()
-        style = data.get("style", "balanced")  # ✅ New: Generation style
+        style = data.get("style", "balanced")  # ✅ Accept from frontend
         contest_id = data.get("contest_id")
         num_teams = data.get("num_teams", 1)
 
         if not contest_id or not match_id:
             return jsonify({"message": "contest_id and match_id required"}), 400
 
-        if num_teams > 100:  # ✅ Limit request size
+        if num_teams > 100:
             return jsonify({"message": "Max 100 AI teams allowed per request"}), 400
 
         cur = db.cursor(dictionary=True)
@@ -2686,7 +2673,7 @@ def generate_team(current_user_email, match_id):
 
         for i in range(num_teams):
             for attempt in range(50):
-                team_players = pick_team(pool)
+                team_players = pick_team(pool, style=style)  # ✅ Now using style
                 if not team_players:
                     continue
 
@@ -2700,11 +2687,9 @@ def generate_team(current_user_email, match_id):
                     p["credit_value"] = float(p["credit_value"])
                     p["player_id"] = p.get("id", None)
 
-                # ✅ Calculate strength score
                 strength = sum(p["credit_value"] for p in team_players)
                 strength += 2
 
-                # ✅ Classify rating
                 if strength > 102:
                     rating = "🔥 Aggressive"
                 elif strength >= 90:
@@ -2713,13 +2698,11 @@ def generate_team(current_user_email, match_id):
                     rating = "⚖️ Defensive"
 
                 app.logger.warning(f"📊 Team Strength: {strength} → {rating}")  
-                    
 
                 team_name = f"AI Team {existing_count + i + 1}"
                 cur.execute("INSERT INTO teams (team_name, players, user_id, contest_id, strength_score, rating) VALUES (%s, %s, %s, %s, %s, %s)",
                             (team_name, json.dumps(team_players, default=str), user_id, contest_id, strength, rating))
                 team_id = cur.lastrowid
-                
 
                 cur.execute("INSERT INTO entries (contest_id, user_id, team_id) VALUES (%s, %s, %s)",
                             (contest_id, user_id, team_id))
@@ -2727,11 +2710,10 @@ def generate_team(current_user_email, match_id):
                 team_ids.append(team_id)
                 break
             else:
-                # 🛡️ Fallback logic
                 fallback_attempts = 0
                 team_players = None
                 while not team_players and fallback_attempts < 100:
-                    team_players = pick_team(pool)
+                    team_players = pick_team(pool, style=style)  # ✅ use style even in fallback
                     fallback_attempts += 1
 
                 if team_players:
@@ -2752,7 +2734,7 @@ def generate_team(current_user_email, match_id):
                 else:
                     app.logger.error(f"❌ Fallback failed after 100 attempts — no team saved")
 
-        db.commit()  # ✅ Batch commit for all inserts
+        db.commit()
 
         return jsonify({
             "success": True,
