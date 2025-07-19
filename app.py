@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 import os
 import bcrypt
 import traceback
+import random, time
+
 
 # ─── LOAD ENVIRONMENT VARIABLES ────────────────────────────────────────────────
 # Load variables from a .env file (good for DB credentials, secret keys, etc.)
