@@ -2766,6 +2766,7 @@ def pick_team(pool, style="balanced"):
             "last_team_strength": strength,
             "last_team_rating": rating,
             "team_style": style  # ✅ Add this!
+
         }), 200
 
     except Exception as e:
