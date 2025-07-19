@@ -2572,19 +2572,18 @@ def generate_team(current_user_email, match_id):
         from collections import Counter
 
         random.seed(f"{time.time_ns()}-{random.random()}")
-
-        batsmen     = [p for p in pool if p['role'] == 'batsman']
-        bowlers     = [p for p in pool if p['role'] == 'bowler']
+        batsmen = [p for p in pool if p['role'] == 'batsman']
+        bowlers = [p for p in pool if p['role'] == 'bowler']
         allrounders = [p for p in pool if p['role'] == 'allrounder']
-        keepers     = [p for p in pool if p['role'] == 'keeper']
+        keepers = [p for p in pool if p['role'] == 'keeper']
 
         if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
             return None
 
         team_counter = Counter()
         selected_names = set()
-
         team = []
+
         for name in must_have:
             match = next((p for p in pool if p['player_name'].lower() == name.lower()), None)
             if match and match['player_name'] not in selected_names:
@@ -2653,12 +2652,10 @@ def generate_team(current_user_email, match_id):
 
         if not contest_id or not match_id:
             return jsonify({"message": "contest_id and match_id required"}), 400
-
         if num_teams > 100:
             return jsonify({"message": "Max 100 AI teams allowed per request"}), 400
 
         cur = db.cursor(dictionary=True)
-
         cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
         user_row = cur.fetchone()
         if not user_row:
@@ -2675,6 +2672,7 @@ def generate_team(current_user_email, match_id):
 
         existing_hashes = set()
         team_ids = []
+        strength = 0  # ✅ initialize to avoid UnboundLocalError
 
         for i in range(num_teams):
             for attempt in range(50):
@@ -2687,7 +2685,6 @@ def generate_team(current_user_email, match_id):
                     continue
 
                 existing_hashes.add(squad_hash)
-
                 for p in team_players:
                     p["credit_value"] = float(p["credit_value"])
                     p["player_id"] = p.get("id", None)
@@ -2745,12 +2742,12 @@ def generate_team(current_user_email, match_id):
         db.commit()
 
         return jsonify({
-            "success": True,
+            "success": bool(team_ids),
             "team_ids": team_ids,
             "team_id": team_ids[0] if team_ids else None,
-            "message": f"{len(team_ids)} AI team(s) created ✔",
+            "message": f"{len(team_ids)} AI team(s) created ✔" if team_ids else "❌ No valid teams were generated.",
             "last_team_strength": strength
-        }), 200
+        }), 200 if team_ids else 400
 
     except Exception as e:
         import traceback
