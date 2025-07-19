@@ -2568,17 +2568,27 @@ def generate_team(current_user_email, match_id):
     if request.method == 'OPTIONS':
         return '', 204  # ✅ CORS preflight support
 
-    def pick_team(pool):
+    def pick_team(pool, style="balanced"):
         import random, time
-        from collections import Counter
+    from collections import Counter
 
-        random.seed(f"{time.time_ns()}-{random.random()}")  # 🔄 Unique seed
+    random.seed(f"{time.time_ns()}-{random.random()}")  # 🔄 Unique seed
+
+    # Wildcard Mode — pick any 11 random players
+    if style == "wild":
+        random.shuffle(pool)
+        return pool[:11] if len(pool) >= 11 else None
+
+    # Aggressive Mode — sort by highest credit value
+    if style == "aggressive":
+        pool = sorted(pool, key=lambda p: float(p['credit_value']), reverse=True)
 
         # 🎯 Group players by role
         batsmen     = [p for p in pool if p['role'] == 'batsman']
         bowlers     = [p for p in pool if p['role'] == 'bowler']
         allrounders = [p for p in pool if p['role'] == 'allrounder']
         keepers     = [p for p in pool if p['role'] == 'keeper']
+        team_players = pick_team(pool, style=style)  # ✅ Pass the mode to your function
 
         if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
             return None
@@ -2643,6 +2653,7 @@ def generate_team(current_user_email, match_id):
         import random, json
 
         data = request.get_json()
+        style = data.get("style", "balanced")  # ✅ New: Generation style
         contest_id = data.get("contest_id")
         num_teams = data.get("num_teams", 1)
 
