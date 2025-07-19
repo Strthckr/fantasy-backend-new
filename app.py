@@ -2571,6 +2571,9 @@ def generate_team(current_user_email, match_id):
         import random, time
         from collections import Counter
 
+        logging.warning(f"➡️ Must-have: {must_have}")
+        logging.warning(f"➡️ Pool roles: Batsmen={len(batsmen)}, Bowlers={len(bowlers)}, Allrounders={len(allrounders)}, Keepers={len(keepers)}")
+
         random.seed(f"{time.time_ns()}-{random.random()}")
         batsmen = [p for p in pool if p['role'] == 'batsman']
         bowlers = [p for p in pool if p['role'] == 'bowler']
@@ -2604,6 +2607,7 @@ def generate_team(current_user_email, match_id):
                     if team_name:
                         team_counter[team_name] += 1
                 attempts += 1
+                logging.error("🧠 pick_team failed to form a valid team — constraints likely unmet.")
             return selected
 
         team += select_valid_players(batsmen, 4)
@@ -2664,15 +2668,34 @@ def generate_team(current_user_email, match_id):
 
         cur.execute("SELECT id, player_name, role, credit_value, team_name FROM players WHERE match_id = %s", (match_id,))
         pool = cur.fetchall()
+
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
+
+        # ✅ Role sanity check for must-have
+        role_counts = { 'batsman': 0, 'bowler': 0, 'allrounder': 0, 'keeper': 0 }
+        for name in must_have:
+            p = next((pl for pl in pool if pl['player_name'].lower() == name.lower()), None)
+            if p and p['role'] in role_counts:
+                role_counts[p['role']] += 1
+
+        invalid_roles = []
+        if role_counts['keeper'] > 1: invalid_roles.append('keeper > 1')
+        if role_counts['batsman'] > 3: invalid_roles.append('batsman > 3')
+        if role_counts['bowler'] > 3: invalid_roles.append('bowler > 3')
+        if role_counts['allrounder'] > 3: invalid_roles.append('allrounder > 3')
+
+        if invalid_roles:
+            return jsonify({
+                "message": f"Invalid must-have selection: {', '.join(invalid_roles)}"
+            }), 400
 
         cur.execute("SELECT COUNT(*) FROM entries WHERE contest_id = %s AND user_id = %s", (contest_id, user_id))
         existing_count = cur.fetchone()['COUNT(*)']
 
         existing_hashes = set()
         team_ids = []
-        strength = 0  # ✅ initialize to avoid UnboundLocalError
+        strength = 0
 
         for i in range(num_teams):
             for attempt in range(50):
@@ -2706,7 +2729,6 @@ def generate_team(current_user_email, match_id):
 
                 team_ids.append(team_id)
                 break
-
             else:
                 fallback_attempts = 0
                 team_players = None
