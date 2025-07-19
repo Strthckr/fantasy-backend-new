@@ -2700,8 +2700,8 @@ def generate_team(current_user_email, match_id):
                 app.logger.warning(f"📊 Team Strength: {strength} → {rating}")  
 
                 team_name = f"AI Team {existing_count + i + 1}"
-                cur.execute("INSERT INTO teams (team_name, players, user_id, contest_id, strength_score, rating) VALUES (%s, %s, %s, %s, %s, %s)",
-                            (team_name, json.dumps(team_players, default=str), user_id, contest_id, strength, rating))
+                cur.execute("INSERT INTO teams (team_name, players, user_id, contest_id, strength_score, rating, team_style) VALUES (%s, %s, %s, %s, %s, %s)",
+                            (team_name, json.dumps(team_players, default=str), user_id, contest_id, strength, rating, style))
                 team_id = cur.lastrowid
 
                 cur.execute("INSERT INTO entries (contest_id, user_id, team_id) VALUES (%s, %s, %s)",
@@ -2742,7 +2742,8 @@ def generate_team(current_user_email, match_id):
             "team_id": team_ids[0] if team_ids else None,
             "message": f"{len(team_ids)} AI team(s) created ✔",
             "last_team_strength": strength,
-            "last_team_rating": rating
+            "last_team_rating": rating,
+            "team_style": style  # ✅ Add this!
         }), 200
 
     except Exception as e:
