@@ -2567,211 +2567,198 @@ def generate_team(current_user_email, match_id):
     if request.method == 'OPTIONS':
         return '', 204
 
-    # ✅ Define the function here — no extra indentation
+    # Always-defined helper
     def pick_team(pool, must_have=[]):
-        import random, time, logging
+        import random
+        import time
+        import logging
         from collections import Counter
 
-
-        logging.warning(f"➡️ Must-have: {must_have}")
-        logging.warning(f"➡️ Pool roles: Batsmen={len(batsmen)}, Bowlers={len(bowlers)}, Allrounders={len(allrounders)}, Keepers={len(keepers)}")
-
-        random.seed(f"{time.time_ns()}-{random.random()}")
-        batsmen = [p for p in pool if p['role'] == 'batsman']
-        bowlers = [p for p in pool if p['role'] == 'bowler']
+        # Build role buckets
+        batsmen     = [p for p in pool if p['role'] == 'batsman']
+        bowlers     = [p for p in pool if p['role'] == 'bowler']
         allrounders = [p for p in pool if p['role'] == 'allrounder']
-        keepers = [p for p in pool if p['role'] == 'keeper']
+        keepers     = [p for p in pool if p['role'] == 'keeper']
 
+        # Debug snapshots
+        logging.warning(f"➡️ Must-have: {must_have}")
+        logging.warning(
+            f"➡️ Pool roles → Batsmen={len(batsmen)}, "
+            f"Bowler={len(bowlers)}, Allrounders={len(allrounders)}, Keepers={len(keepers)}"
+        )
+
+        # Base‐quota check
         if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
+            logging.error("🧠 pick_team: pool cannot satisfy base quotas")
             return None
 
-        team_counter = Counter()
+        team_counter   = Counter()
         selected_names = set()
-        team = []
+        team           = []
 
+        # Insert must-have first
         for name in must_have:
-            match = next((p for p in pool if p['player_name'].lower() == name.lower()), None)
-            if match and match['player_name'] not in selected_names:
-                team.append(match)
-                selected_names.add(match['player_name'])
-                if match.get('team_name'):
-                    team_counter[match['team_name']] += 1
+            candidate = next((p for p in pool if p['player_name'].lower() == name.lower()), None)
+            if candidate and candidate['player_name'] not in selected_names:
+                team.append(candidate)
+                selected_names.add(candidate['player_name'])
+                if candidate.get('team_name'):
+                    team_counter[candidate['team_name']] += 1
 
-        def select_valid_players(group, required_count):
-            selected, attempts = [], 0
-            while len(selected) < required_count and attempts < 30:
-                player = random.choice(group)
-                name = player['player_name']
-                team_name = player.get('team_name')
-                if name not in selected_names and (not team_name or team_counter[team_name] < 11):
-                    selected.append(player)
-                    selected_names.add(name)
-                    if team_name:
-                        team_counter[team_name] += 1
+        # Generic selector
+        def select_valid(group, count):
+            sel, attempts = [], 0
+            while len(sel) < count and attempts < 30:
+                p = random.choice(group)
+                nm = p['player_name']; tn = p.get('team_name')
+                if nm not in selected_names and (not tn or team_counter[tn] < 11):
+                    sel.append(p)
+                    selected_names.add(nm)
+                    if tn: team_counter[tn] += 1
                 attempts += 1
-                logging.error("🧠 pick_team failed to form a valid team — constraints likely unmet.")
-            return selected
+            return sel
 
-        team += select_valid_players(batsmen, 4)
-        team += select_valid_players(bowlers, 3)
-        team += select_valid_players(allrounders, 2)
-        team += select_valid_players(keepers, 1)
+        team += select_valid(batsmen,     4)
+        team += select_valid(bowlers,     3)
+        team += select_valid(allrounders, 2)
+        team += select_valid(keepers,     1)
 
         if len(team) < 10:
+            logging.error("🧠 pick_team: couldn't reach 10 after role picks")
             return None
 
-        remaining_pool = [p for p in pool if p['player_name'] not in selected_names]
-        random.shuffle(remaining_pool)
-
-        for player in remaining_pool:
-            name = player['player_name']
-            team_name = player.get('team_name')
-            if name not in selected_names and (not team_name or team_counter[team_name] < 11):
-                team.append(player)
-                selected_names.add(name)
-                if team_name:
-                    team_counter[team_name] += 1
-                break
+        # Fill final slot
+        import random as _rand; _rand.shuffle(pool)
+        for p in pool:
+            if p['player_name'] not in selected_names:
+                tn = p.get('team_name')
+                if not tn or team_counter[tn] < 11:
+                    team.append(p)
+                    break
 
         if len(team) != 11:
+            logging.error("🧠 pick_team: final roster not 11")
             return None
 
-        captain = random.choice(team)
-        vice_candidates = [p for p in team if p['player_name'] != captain['player_name']]
-        vice_captain = random.choice(vice_candidates) if vice_candidates else captain
-
+        # Assign C/VC
+        import random as _r
+        cap = _r.choice(team)
+        vc  = _r.choice([p for p in team if p['player_name'] != cap['player_name']]) if len(team) > 1 else cap
         for p in team:
-            p['is_captain'] = (p['player_name'] == captain['player_name'])
-            p['is_vice_captain'] = (p['player_name'] == vice_captain['player_name'])
+            p['is_captain']     = (p['player_name'] == cap['player_name'])
+            p['is_vice_captain']= (p['player_name'] == vc ['player_name'])
 
-        import logging
         logging.warning(f"✅ pick_team generated: {[p['player_name'] for p in team]}")
         return team
 
     try:
-        import random, json
-        data = request.get_json()
-        contest_id = data.get("contest_id")
-        num_teams = data.get("num_teams", 1)
-        must_have_raw = data.get("must_have", [])
-        must_have = [name.strip() for name in must_have_raw if name.strip()]
+        import random
+        import json
+        import traceback
+
+        data         = request.get_json() or {}
+        contest_id   = data.get("contest_id")
+        num_teams    = data.get("num_teams", 1)
+        must_have    = [n.strip() for n in data.get("must_have", []) if n.strip()]
 
         if not contest_id or not match_id:
             return jsonify({"message": "contest_id and match_id required"}), 400
         if num_teams > 100:
             return jsonify({"message": "Max 100 AI teams allowed per request"}), 400
 
+        # Fetch user
         cur = db.cursor(dictionary=True)
         cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-        user_row = cur.fetchone()
-        if not user_row:
+        urow = cur.fetchone()
+        if not urow:
             return jsonify({"message": "User not found"}), 404
-        user_id = user_row["id"]
+        user_id = urow["id"]
 
-        cur.execute("SELECT id, player_name, role, credit_value, team_name FROM players WHERE match_id = %s", (match_id,))
+        # Load players
+        cur.execute(
+            "SELECT id, player_name, role, credit_value, team_name "
+            "FROM players WHERE match_id = %s",
+            (match_id,)
+        )
         pool = cur.fetchall()
-
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
 
-        # ✅ Role sanity check for must-have
-        role_counts = { 'batsman': 0, 'bowler': 0, 'allrounder': 0, 'keeper': 0 }
+        # Must-have role sanity
+        role_counts = dict(batsman=0, bowler=0, allrounder=0, keeper=0)
+        unknown     = []
         for name in must_have:
             p = next((pl for pl in pool if pl['player_name'].lower() == name.lower()), None)
-            if p and p['role'] in role_counts:
+            if not p:
+                unknown.append(name)
+            else:
                 role_counts[p['role']] += 1
 
-        invalid_roles = []
-        if role_counts['keeper'] > 1: invalid_roles.append('keeper > 1')
-        if role_counts['batsman'] > 3: invalid_roles.append('batsman > 3')
-        if role_counts['bowler'] > 3: invalid_roles.append('bowler > 3')
-        if role_counts['allrounder'] > 3: invalid_roles.append('allrounder > 3')
+        violations = []
+        if role_counts['keeper']     > 1: violations.append("keeper > 1")
+        if role_counts['batsman']    > 3: violations.append("batsman > 3")
+        if role_counts['bowler']     > 3: violations.append("bowler > 3")
+        if role_counts['allrounder'] > 3: violations.append("allrounder > 3")
+        if unknown:
+            violations.append("unknown players: " + ", ".join(unknown))
 
-        if invalid_roles:
-            return jsonify({
-                "message": f"Invalid must-have selection: {', '.join(invalid_roles)}"
-            }), 400
+        if violations:
+            return jsonify({"message": "Invalid must-have: " + "; ".join(violations)}), 400
 
-        cur.execute("SELECT COUNT(*) FROM entries WHERE contest_id = %s AND user_id = %s", (contest_id, user_id))
-        existing_count = cur.fetchone()['COUNT(*)']
+        # Count existing entries
+        cur.execute(
+            "SELECT COUNT(*) AS cnt FROM entries "
+            "WHERE contest_id=%s AND user_id=%s",
+            (contest_id, user_id)
+        )
+        existing = cur.fetchone()["cnt"]
 
         existing_hashes = set()
-        team_ids = []
-        strength = 0
+        team_ids       = []
+        last_strength  = 0
 
         for i in range(num_teams):
-            for attempt in range(50):
-                team_players = pick_team(pool, must_have=must_have)
-                if not team_players:
+            # Try with must_have first, then fallback to empty
+            for attempt in range(150):
+                use_mh = must_have if attempt < 50 else []
+                squad = pick_team(pool, must_have=use_mh)
+                if not squad:
                     continue
-
-                squad_hash = hash("".join(sorted(p['player_name'] for p in team_players)))
-                if squad_hash in existing_hashes:
+                h = hash("".join(sorted(p['player_name'] for p in squad)))
+                if h in existing_hashes:
                     continue
+                existing_hashes.add(h)
 
-                existing_hashes.add(squad_hash)
-                for p in team_players:
+                # Normalize & compute strength
+                for p in squad:
                     p["credit_value"] = float(p["credit_value"])
-                    p["player_id"] = p.get("id", None)
+                    p["player_id"]    = p.get("id")
+                last_strength = sum(p["credit_value"] for p in squad) + 2
 
-                strength = sum(p["credit_value"] for p in team_players)
-                strength += 2
-
-                team_name = f"AI Team {existing_count + i + 1}"
-                cur.execute("""
-                    INSERT INTO teams (team_name, players, user_id, contest_id, strength_score)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (team_name, json.dumps(team_players, default=str), user_id, contest_id, strength))
-                team_id = cur.lastrowid
-
-                cur.execute("""
-                    INSERT INTO entries (contest_id, user_id, team_id)
-                    VALUES (%s, %s, %s)
-                """, (contest_id, user_id, team_id))
-
-                team_ids.append(team_id)
+                # Persist team & entry
+                name = f"AI Team {existing + i + 1}" if attempt < 50 else f"Fallback AI Team {existing + i + 1}"
+                cur.execute(
+                    "INSERT INTO teams (team_name, players, user_id, contest_id, strength_score) "
+                    "VALUES (%s,%s,%s,%s,%s)",
+                    (name, json.dumps(squad, default=str), user_id, contest_id, last_strength)
+                )
+                tid = cur.lastrowid
+                cur.execute(
+                    "INSERT INTO entries (contest_id, user_id, team_id) VALUES (%s,%s,%s)",
+                    (contest_id, user_id, tid)
+                )
+                team_ids.append(tid)
                 break
-            else:
-                fallback_attempts = 0
-                team_players = None
-                while not team_players and fallback_attempts < 100:
-                    team_players = pick_team(pool, must_have=must_have)
-                    fallback_attempts += 1
-
-                if team_players:
-                    for p in team_players:
-                        p["credit_value"] = float(p["credit_value"])
-                        p["player_id"] = p.get("id", None)
-
-                    strength = sum(p["credit_value"] for p in team_players)
-                    strength += 2
-
-                    team_name = f"Fallback AI Team {existing_count + i + 1}"
-                    cur.execute("""
-                        INSERT INTO teams (team_name, players, user_id, contest_id, strength_score)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (team_name, json.dumps(team_players, default=str), user_id, contest_id, strength))
-                    team_id = cur.lastrowid
-
-                    cur.execute("""
-                        INSERT INTO entries (contest_id, user_id, team_id)
-                        VALUES (%s, %s, %s)
-                    """, (contest_id, user_id, team_id))
-
-                    team_ids.append(team_id)
-                    app.logger.warning(f"✅ Fallback AI Team {team_name} saved")
-                else:
-                    app.logger.error("❌ Fallback failed — no team saved")
 
         db.commit()
 
         return jsonify({
-            "success": bool(team_ids),
-            "team_ids": team_ids,
-            "team_id": team_ids[0] if team_ids else None,
-            "message": f"{len(team_ids)} AI team(s) created ✔" if team_ids else "❌ No valid teams were generated.",
-            "last_team_strength": strength
-        }), 200 if team_ids else 400
+            "success":            bool(team_ids),
+            "team_ids":           team_ids,
+            "team_id":            team_ids[0] if team_ids else None,
+            "message":            f"{len(team_ids)} AI team(s) created.",
+            "last_team_strength": last_strength
+        }), (200 if team_ids else 400)
 
     except Exception as e:
         import traceback
