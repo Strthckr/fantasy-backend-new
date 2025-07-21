@@ -2567,161 +2567,193 @@ def generate_team(current_user_email, match_id):
     if request.method == 'OPTIONS':
         return '', 204
 
-    # Always-defined helper
+    # ─── AI SQUAD BUILDER ──────────────────────────────────────────────
     def pick_team(pool, must_have=[]):
-        import random
-        import time
-        import logging
+        import random, time, logging
         from collections import Counter
 
-        # Build role buckets
+        # 1) Define role quotas
+        quotas = {'batsman': 4, 'bowler': 3, 'allrounder': 2, 'keeper': 1}
+
+        # 2) Partition the pool
         batsmen     = [p for p in pool if p['role'] == 'batsman']
         bowlers     = [p for p in pool if p['role'] == 'bowler']
         allrounders = [p for p in pool if p['role'] == 'allrounder']
         keepers     = [p for p in pool if p['role'] == 'keeper']
 
-        # Debug snapshots
+        # 3) Debug log
         logging.warning(f"➡️ Must-have: {must_have}")
         logging.warning(
             f"➡️ Pool roles → Batsmen={len(batsmen)}, "
-            f"Bowler={len(bowlers)}, Allrounders={len(allrounders)}, Keepers={len(keepers)}"
+            f"Bowler={len(bowlers)}, Allrounder={len(allrounders)}, Keeper={len(keepers)}"
         )
 
-        # Base‐quota check
-        if len(batsmen) < 4 or len(bowlers) < 3 or len(allrounders) < 2 or len(keepers) < 1:
+        # 4) Basic pool sufficiency check
+        if (len(batsmen) < quotas['batsman'] or
+            len(bowlers) < quotas['bowler'] or
+            len(allrounders) < quotas['allrounder'] or
+            len(keepers) < quotas['keeper']):
             logging.error("🧠 pick_team: pool cannot satisfy base quotas")
             return None
 
-        team_counter   = Counter()
-        selected_names = set()
-        team           = []
+        team            = []
+        selected_names  = set()
+        team_counter    = Counter()   # track per real-team to max 11
 
-        # Insert must-have first
+        # 5) Add must-have players first
+        mh_counts = Counter()
         for name in must_have:
             candidate = next((p for p in pool if p['player_name'].lower() == name.lower()), None)
             if candidate and candidate['player_name'] not in selected_names:
                 team.append(candidate)
                 selected_names.add(candidate['player_name'])
+                mh_counts[candidate['role']] += 1
                 if candidate.get('team_name'):
                     team_counter[candidate['team_name']] += 1
 
-        # Generic selector
-        def select_valid(group, count):
+        # 6) Helper to randomly pick 'count' players from a role group
+        def select_from(group, count):
             sel, attempts = [], 0
             while len(sel) < count and attempts < 30:
                 p = random.choice(group)
-                nm = p['player_name']; tn = p.get('team_name')
+                nm = p['player_name']
+                tn = p.get('team_name')
+                # avoid duplicates and over-quota per real team
                 if nm not in selected_names and (not tn or team_counter[tn] < 11):
                     sel.append(p)
                     selected_names.add(nm)
-                    if tn: team_counter[tn] += 1
+                    if tn:
+                        team_counter[tn] += 1
                 attempts += 1
             return sel
 
-        team += select_valid(batsmen,     4)
-        team += select_valid(bowlers,     3)
-        team += select_valid(allrounders, 2)
-        team += select_valid(keepers,     1)
+        # 7) Compute how many more of each role we need
+        req_bats   = quotas['batsman']    - mh_counts['batsman']
+        req_bowl   = quotas['bowler']     - mh_counts['bowler']
+        req_all    = quotas['allrounder'] - mh_counts['allrounder']
+        req_keep   = quotas['keeper']     - mh_counts['keeper']
 
-        if len(team) < 10:
-            logging.error("🧠 pick_team: couldn't reach 10 after role picks")
+        # 8) If must-have itself breaks quotas, bail
+        if any(x < 0 for x in [req_bats, req_bowl, req_all, req_keep]):
+            logging.error("🧠 pick_team: must-have exceeds role quotas")
             return None
 
-        # Fill final slot
-        import random as _rand; _rand.shuffle(pool)
-        for p in pool:
-            if p['player_name'] not in selected_names:
-                tn = p.get('team_name')
-                if not tn or team_counter[tn] < 11:
-                    team.append(p)
-                    break
+        # 9) Fill each role up to quota
+        team += select_from(batsmen,    req_bats)
+        team += select_from(bowlers,    req_bowl)
+        team += select_from(allrounders,req_all)
+        team += select_from(keepers,    req_keep)
 
+        # 10) Check we reached 10 players (sum of quotas)
+        if len(team) < sum(quotas.values()):
+            logging.error("🧠 pick_team: couldn't reach base roster of 10")
+            return None
+
+        # 11) Final 1-player fill (no extra keeper)
+        remaining = [p for p in pool if p['player_name'] not in selected_names]
+        random.shuffle(remaining)
+        for p in remaining:
+            if p['role'] == 'keeper':  # never add a second keeper
+                continue
+            nm = p['player_name']
+            tn = p.get('team_name')
+            if nm not in selected_names and (not tn or team_counter[tn] < 11):
+                team.append(p)
+                selected_names.add(nm)
+                if tn:
+                    team_counter[tn] += 1
+                break
+
+        # 12) Must end up with exactly 11
         if len(team) != 11:
-            logging.error("🧠 pick_team: final roster not 11")
+            logging.error("🧠 pick_team: final roster not size 11")
             return None
 
-        # Assign C/VC
-        import random as _r
-        cap = _r.choice(team)
-        vc  = _r.choice([p for p in team if p['player_name'] != cap['player_name']]) if len(team) > 1 else cap
+        # 13) Assign captain & vice-captain
+        cap = random.choice(team)
+        vice_candidates = [p for p in team if p['player_name'] != cap['player_name']]
+        vc = random.choice(vice_candidates) if vice_candidates else cap
+
         for p in team:
-            p['is_captain']     = (p['player_name'] == cap['player_name'])
-            p['is_vice_captain']= (p['player_name'] == vc ['player_name'])
+            p['is_captain']      = (p['player_name'] == cap['player_name'])
+            p['is_vice_captain'] = (p['player_name'] == vc['player_name'])
 
         logging.warning(f"✅ pick_team generated: {[p['player_name'] for p in team]}")
         return team
 
+    # ─── Main Handler ─────────────────────────────────────────────────
     try:
-        import random
-        import json
-        import traceback
+        import json, traceback
 
-        data         = request.get_json() or {}
-        contest_id   = data.get("contest_id")
-        num_teams    = data.get("num_teams", 1)
-        must_have    = [n.strip() for n in data.get("must_have", []) if n.strip()]
+        data       = request.get_json() or {}
+        contest_id = data.get("contest_id")
+        num_teams  = data.get("num_teams", 1)
+        must_have  = [n.strip() for n in data.get("must_have", []) if n.strip()]
 
         if not contest_id or not match_id:
             return jsonify({"message": "contest_id and match_id required"}), 400
         if num_teams > 100:
-            return jsonify({"message": "Max 100 AI teams allowed per request"}), 400
+            return jsonify({"message": "Max 100 AI teams per request"}), 400
 
-        # Fetch user
+        # 1) Fetch user
         cur = db.cursor(dictionary=True)
-        cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-        urow = cur.fetchone()
-        if not urow:
+        cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+        u = cur.fetchone()
+        if not u:
             return jsonify({"message": "User not found"}), 404
-        user_id = urow["id"]
+        user_id = u['id']
 
-        # Load players
+        # 2) Load player pool
         cur.execute(
             "SELECT id, player_name, role, credit_value, team_name "
-            "FROM players WHERE match_id = %s",
+            "FROM players WHERE match_id=%s",
             (match_id,)
         )
         pool = cur.fetchall()
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
 
-        # Must-have role sanity
-        role_counts = dict(batsman=0, bowler=0, allrounder=0, keeper=0)
-        unknown     = []
+        # 3) Role-limit sanity check on must-have
+        from collections import Counter
+        mh_counts = Counter()
+        missing   = []
         for name in must_have:
             p = next((pl for pl in pool if pl['player_name'].lower() == name.lower()), None)
             if not p:
-                unknown.append(name)
+                missing.append(name)
             else:
-                role_counts[p['role']] += 1
+                mh_counts[p['role']] += 1
 
         violations = []
-        if role_counts['keeper']     > 1: violations.append("keeper > 1")
-        if role_counts['batsman']    > 3: violations.append("batsman > 3")
-        if role_counts['bowler']     > 3: violations.append("bowler > 3")
-        if role_counts['allrounder'] > 3: violations.append("allrounder > 3")
-        if unknown:
-            violations.append("unknown players: " + ", ".join(unknown))
+        if mh_counts['keeper']     > 1: violations.append('keeper > 1')
+        if mh_counts['batsman']    > 3: violations.append('batsman > 3')
+        if mh_counts['bowler']     > 3: violations.append('bowler > 3')
+        if mh_counts['allrounder'] > 3: violations.append('allrounder > 3')
+        if missing:
+            violations.append("not in match: " + ", ".join(missing))
 
         if violations:
-            return jsonify({"message": "Invalid must-have: " + "; ".join(violations)}), 400
+            return jsonify({
+                "message": "Invalid must-have: " + "; ".join(violations)
+            }), 400
 
-        # Count existing entries
+        # 4) Count existing entries
         cur.execute(
             "SELECT COUNT(*) AS cnt FROM entries "
             "WHERE contest_id=%s AND user_id=%s",
             (contest_id, user_id)
         )
-        existing = cur.fetchone()["cnt"]
+        existing = cur.fetchone()['cnt']
 
+        # 5) Build teams
         existing_hashes = set()
-        team_ids       = []
-        last_strength  = 0
+        team_ids        = []
+        last_strength   = 0
 
         for i in range(num_teams):
-            # Try with must_have first, then fallback to empty
-            for attempt in range(150):
-                use_mh = must_have if attempt < 50 else []
-                squad = pick_team(pool, must_have=use_mh)
+            # Try up to 50 times to build a unique squad
+            for _ in range(50):
+                squad = pick_team(pool, must_have=must_have)
                 if not squad:
                     continue
                 h = hash("".join(sorted(p['player_name'] for p in squad)))
@@ -2729,18 +2761,17 @@ def generate_team(current_user_email, match_id):
                     continue
                 existing_hashes.add(h)
 
-                # Normalize & compute strength
+                # Persist
                 for p in squad:
-                    p["credit_value"] = float(p["credit_value"])
-                    p["player_id"]    = p.get("id")
-                last_strength = sum(p["credit_value"] for p in squad) + 2
+                    p['credit_value'] = float(p['credit_value'])
+                    p['player_id']    = p.get('id')
+                last_strength = sum(p['credit_value'] for p in squad) + 2
 
-                # Persist team & entry
-                name = f"AI Team {existing + i + 1}" if attempt < 50 else f"Fallback AI Team {existing + i + 1}"
+                tname = f"AI Team {existing + i + 1}"
                 cur.execute(
                     "INSERT INTO teams (team_name, players, user_id, contest_id, strength_score) "
                     "VALUES (%s,%s,%s,%s,%s)",
-                    (name, json.dumps(squad, default=str), user_id, contest_id, last_strength)
+                    (tname, json.dumps(squad, default=str), user_id, contest_id, last_strength)
                 )
                 tid = cur.lastrowid
                 cur.execute(
@@ -2756,7 +2787,7 @@ def generate_team(current_user_email, match_id):
             "success":            bool(team_ids),
             "team_ids":           team_ids,
             "team_id":            team_ids[0] if team_ids else None,
-            "message":            f"{len(team_ids)} AI team(s) created.",
+            "message":            f"{len(team_ids)} AI team(s) created ✔",
             "last_team_strength": last_strength
         }), (200 if team_ids else 400)
 
