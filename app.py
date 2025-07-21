@@ -2568,7 +2568,7 @@ def generate_team(current_user_email, match_id):
         return '', 204
 
     # ─── AI SQUAD BUILDER ──────────────────────────────────────────────
-        def pick_team(pool, must_have=None, captain=None, vice_captain=None):
+    def pick_team(pool, must_have=None, captain=None, vice_captain=None):
         import random, time, logging
         from collections import Counter
 
@@ -2577,13 +2577,13 @@ def generate_team(current_user_email, match_id):
         # 1) Role quotas
         quotas = {'batsman': 4, 'bowler': 3, 'allrounder': 2, 'keeper': 1}
 
-        # 2) Partition pool
+        # 2) Partition pool by role
         batsmen     = [p for p in pool if p['role'] == 'batsman']
         bowlers     = [p for p in pool if p['role'] == 'bowler']
         allrounders = [p for p in pool if p['role'] == 'allrounder']
         keepers     = [p for p in pool if p['role'] == 'keeper']
 
-        # 3) Check sufficiency
+        # 3) Pool sufficiency check
         if (len(batsmen) < quotas['batsman'] or
             len(bowlers) < quotas['bowler'] or
             len(allrounders) < quotas['allrounder'] or
@@ -2635,7 +2635,7 @@ def generate_team(current_user_email, match_id):
             logging.error("🧠 pick_team: forced picks exceed role quotas")
             return None
 
-        # 8) Filler helper
+        # 8) Helper to fill remaining slots
         def fill(group, count):
             sel, attempts = [], 0
             while len(sel) < count and attempts < 30:
@@ -2649,14 +2649,14 @@ def generate_team(current_user_email, match_id):
                 attempts += 1
             return sel
 
-        # 9) Fill quotas
-        team += fill(batsmen,    quotas['batsman'])
-        team += fill(bowlers,    quotas['bowler'])
-        team += fill(allrounders,quotas['allrounder'])
-        team += fill(keepers,    quotas['keeper'])
+        # 9) Fill each role up to quota
+        team += fill(batsmen,     quotas['batsman'])
+        team += fill(bowlers,     quotas['bowler'])
+        team += fill(allrounders, quotas['allrounder'])
+        team += fill(keepers,     quotas['keeper'])
 
-        # 10) Check 10 players before final slot
-        if len(team) < sum([4,3,2,1]):
+        # 10) Ensure 10 before final slot
+        if len(team) < sum([4, 3, 2, 1]):
             logging.error("🧠 pick_team: couldn't reach base roster of 10")
             return None
 
@@ -2678,7 +2678,7 @@ def generate_team(current_user_email, match_id):
             logging.error("🧠 pick_team: final roster not size 11")
             return None
 
-        # ─── New Captain & Vice Logic ──────────────────────────────
+        # 13) Assign captain & vice-captain (forced or random)
         if not captain:
             cap = random.choice(team)
         if not vice_captain:
@@ -2691,7 +2691,6 @@ def generate_team(current_user_email, match_id):
 
         logging.warning(f"✅ pick_team generated: {[p['player_name'] for p in team]}")
         return team
-
 
     # ─── Main Handler ─────────────────────────────────────────────────
     try:
@@ -2707,21 +2706,21 @@ def generate_team(current_user_email, match_id):
         captain         = data.get("captain")
         vice_captain    = data.get("vice_captain")
 
-        # Basic validations
+        # 1) Basic validation
         if not contest_id or not match_id:
             return jsonify({"message": "contest_id and match_id required"}), 400
         if num_teams > 100:
             return jsonify({"message": "Max 100 AI teams per request"}), 400
 
-        # Fetch user
+        # 2) Fetch user
         cur = db.cursor(dictionary=True)
         cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
         user = cur.fetchone()
         if not user:
             return jsonify({"message": "User not found"}), 404
-        user_id = user['id']
+        user_id = user["id"]
 
-        # Load pool
+        # 3) Load player pool
         cur.execute(
             "SELECT id, player_name, role, credit_value, team_name "
             "FROM players WHERE match_id=%s",
@@ -2731,37 +2730,39 @@ def generate_team(current_user_email, match_id):
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
 
-        # Must-have role sanity (only if mode is mustHave)
-        if mode == 'mustHave':
+        # 4) Must-have sanity (only for mustHave mode)
+        if mode == "mustHave":
             mh_counts = Counter()
             missing   = []
             for name in must_have:
-                p = next((pl for pl in pool if pl['player_name'] == name), None)
+                p = next((pl for pl in pool if pl["player_name"] == name), None)
                 if not p:
                     missing.append(name)
                 else:
-                    mh_counts[p['role']] += 1
+                    mh_counts[p["role"]] += 1
 
             violations = []
-            if mh_counts['keeper']     > 1: violations.append('keeper > 1')
-            if mh_counts['batsman']    > 3: violations.append('batsman > 3')
-            if mh_counts['bowler']     > 3: violations.append('bowler > 3')
-            if mh_counts['allrounder'] > 3: violations.append('allrounder > 3')
+            if mh_counts["keeper"] > 1:     violations.append("keeper > 1")
+            if mh_counts["batsman"] > 3:    violations.append("batsman > 3")
+            if mh_counts["bowler"] > 3:     violations.append("bowler > 3")
+            if mh_counts["allrounder"] > 3: violations.append("allrounder > 3")
             if missing:
                 violations.append("not in match: " + ", ".join(missing))
 
             if violations:
-                return jsonify({"message": "Invalid must-have: " + "; ".join(violations)}), 400
+                return jsonify({
+                    "message": "Invalid must-have: " + "; ".join(violations)
+                }), 400
 
-        # Count existing entries
+        # 5) Count existing AI entries
         cur.execute(
             "SELECT COUNT(*) AS cnt FROM entries "
-            "WHERE contest_id=%s AND user_id=%s",
+            "WHERE contest_id = %s AND user_id = %s",
             (contest_id, user_id)
         )
-        existing = cur.fetchone()['cnt']
+        existing = cur.fetchone()["cnt"]
 
-        # Build & persist teams
+        # 6) Generate & insert teams
         existing_hashes = set()
         team_ids        = []
         last_strength   = 0
@@ -2771,13 +2772,13 @@ def generate_team(current_user_email, match_id):
             for _ in range(50):
                 squad = pick_team(
                     pool,
-                    must_have=(must_have if mode == 'mustHave' else []),
-                    captain=(captain  if mode == 'capvice'  else None),
-                    vice_captain=(vice_captain if mode == 'capvice' else None)
+                    must_have=(must_have if mode == "mustHave" else []),
+                    captain=(captain if mode == "capvice" else None),
+                    vice_captain=(vice_captain if mode == "capvice" else None)
                 )
                 if not squad:
                     continue
-                h = hash("".join(sorted(p['player_name'] for p in squad)))
+                h = hash("".join(sorted(p["player_name"] for p in squad)))
                 if h in existing_hashes:
                     continue
                 existing_hashes.add(h)
@@ -2788,23 +2789,26 @@ def generate_team(current_user_email, match_id):
 
             # normalize & compute strength
             for p in squad:
-                p['credit_value'] = float(p['credit_value'])
-                p['player_id']    = p.get('id')
-            last_strength = sum(p['credit_value'] for p in squad) + 2
+                p["credit_value"] = float(p["credit_value"])
+                p["player_id"]    = p.get("id")
+            last_strength = sum(p["credit_value"] for p in squad) + 2
 
-            # persist team
-            tname = f"AI Team {existing + i + 1}"
+            # insert team
+            team_name = f"AI Team {existing + i + 1}"
             cur.execute(
                 "INSERT INTO teams (team_name, players, user_id, contest_id, strength_score) "
                 "VALUES (%s,%s,%s,%s,%s)",
-                (tname, json.dumps(squad, default=str), user_id, contest_id, last_strength)
+                (team_name, json.dumps(squad, default=str), user_id, contest_id, last_strength)
             )
-            tid = cur.lastrowid
+            team_id = cur.lastrowid
+
+            # insert entry
             cur.execute(
-                "INSERT INTO entries (contest_id, user_id, team_id) VALUES (%s,%s,%s)",
-                (contest_id, user_id, tid)
+                "INSERT INTO entries (contest_id, user_id, team_id) "
+                "VALUES (%s,%s,%s)",
+                (contest_id, user_id, team_id)
             )
-            team_ids.append(tid)
+            team_ids.append(team_id)
 
         db.commit()
 
