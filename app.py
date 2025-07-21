@@ -2962,6 +2962,107 @@ def get_user_team(current_user_email, team_id):
         return jsonify({"message": "Internal Server Error"}), 500
 
 
+@app.route('/user/contest/<int:contest_id>/unjoined-teams')
+@token_required
+def unjoined_teams_for_user(current_user_email, contest_id):
+    cur = db.cursor(dictionary=True)
+    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+    user = cur.fetchone()
+    if not user:
+        return jsonify({"message": "User not found"}), 404
+    user_id = user["id"]
+
+    cur.execute("""
+      SELECT t.id AS team_id, t.team_name, t.strength_score, t.created_at
+      FROM teams t
+      WHERE t.user_id = %s
+        AND NOT EXISTS (
+          SELECT 1 FROM entries e
+          WHERE e.team_id = t.id AND e.contest_id = %s
+        )
+    """, (user_id, contest_id))
+    return jsonify({ "teams": cur.fetchall() })
+
+
+
+@app.route('/join_contest_bulk', methods=['POST'])
+@token_required
+def join_contest_bulk(current_user_email):
+    data = request.get_json() or {}
+    contest_id = data.get("contest_id")
+    team_ids = data.get("team_ids")  # list of team IDs
+
+    if not contest_id or not team_ids:
+        return jsonify({"message": "contest_id and team_ids required"}), 400
+
+    cur = db.cursor()
+    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+    user = cur.fetchone()
+    if not user:
+        return jsonify({"message": "User not found"}), 404
+    user_id = user[0]
+
+    inserted = 0
+    for team_id in team_ids:
+        cur.execute("""
+          SELECT id FROM teams
+          WHERE id = %s AND user_id = %s
+        """, (team_id, user_id))
+        if not cur.fetchone():
+            continue
+
+        # skip if already joined
+        cur.execute("""
+          SELECT id FROM entries
+          WHERE contest_id = %s AND team_id = %s
+        """, (contest_id, team_id))
+        if cur.fetchone():
+            continue
+
+        cur.execute("""
+          INSERT INTO entries (user_id, team_id, contest_id)
+          VALUES (%s, %s, %s)
+        """, (user_id, team_id, contest_id))
+        inserted += 1
+
+    db.commit()
+    return jsonify({ "message": f"{inserted} teams joined successfully." })
+
+
+
+
+
+@app.route('/delete_teams', methods=['POST'])
+@token_required
+def delete_teams_bulk(current_user_email):
+    data = request.get_json() or {}
+    team_ids = data.get("team_ids")  # list of team IDs
+    if not team_ids:
+        return jsonify({"message": "team_ids required"}), 400
+
+    cur = db.cursor()
+    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+    user = cur.fetchone()
+    if not user:
+        return jsonify({"message": "User not found"}), 404
+    user_id = user[0]
+
+    deleted = 0
+    for team_id in team_ids:
+        cur.execute("SELECT user_id FROM teams WHERE id=%s", (team_id,))
+        team = cur.fetchone()
+        if not team or team[0] != user_id:
+            continue
+
+        cur.execute("DELETE FROM entries WHERE team_id=%s", (team_id,))
+        cur.execute("DELETE FROM scores WHERE entry_id IN (SELECT id FROM entries WHERE team_id=%s)", (team_id,))
+        cur.execute("DELETE FROM teams WHERE id=%s", (team_id,))
+        deleted += 1
+
+    db.commit()
+    return jsonify({ "message": f"{deleted} teams deleted." })
+
+
 
 
 
