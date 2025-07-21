@@ -2568,7 +2568,7 @@ def generate_team(current_user_email, match_id):
         return '', 204
 
     # ─── AI SQUAD BUILDER ──────────────────────────────────────────────
-    def pick_team(pool, must_have=None, captain=None, vice_captain=None):
+        def pick_team(pool, must_have=None, captain=None, vice_captain=None):
         import random, time, logging
         from collections import Counter
 
@@ -2577,13 +2577,13 @@ def generate_team(current_user_email, match_id):
         # 1) Role quotas
         quotas = {'batsman': 4, 'bowler': 3, 'allrounder': 2, 'keeper': 1}
 
-        # 2) Partition pool by role
+        # 2) Partition pool
         batsmen     = [p for p in pool if p['role'] == 'batsman']
         bowlers     = [p for p in pool if p['role'] == 'bowler']
         allrounders = [p for p in pool if p['role'] == 'allrounder']
         keepers     = [p for p in pool if p['role'] == 'keeper']
 
-        # 3) Quick pool sufficiency check
+        # 3) Check sufficiency
         if (len(batsmen) < quotas['batsman'] or
             len(bowlers) < quotas['bowler'] or
             len(allrounders) < quotas['allrounder'] or
@@ -2593,7 +2593,7 @@ def generate_team(current_user_email, match_id):
 
         team            = []
         selected_names  = set()
-        team_counter    = Counter()   # real-team counts
+        team_counter    = Counter()
 
         # 4) Force-captain
         if captain:
@@ -2617,32 +2617,30 @@ def generate_team(current_user_email, match_id):
             if vc.get('team_name'):
                 team_counter[vc['team_name']] += 1
 
-        # 6) Must-have inserts
-        mh = must_have or []
-        for name in mh:
+        # 6) Must-have picks
+        for name in (must_have or []):
             if name in selected_names:
                 continue
-            match = next((p for p in pool if p['player_name'] == name), None)
-            if not match:
+            m = next((p for p in pool if p['player_name'] == name), None)
+            if not m:
                 return None
-            team.append(match)
+            team.append(m)
             selected_names.add(name)
-            quotas[match['role']] -= 1
-            if match.get('team_name'):
-                team_counter[match['team_name']] += 1
+            quotas[m['role']] -= 1
+            if m.get('team_name'):
+                team_counter[m['team_name']] += 1
 
-        # 7) If any quota negative, must-have/captain violated
+        # 7) Quota violation check
         if any(v < 0 for v in quotas.values()):
             logging.error("🧠 pick_team: forced picks exceed role quotas")
             return None
 
-        # 8) Helper to randomly fill a role
+        # 8) Filler helper
         def fill(group, count):
             sel, attempts = [], 0
             while len(sel) < count and attempts < 30:
                 p = random.choice(group)
-                nm = p['player_name']
-                tn = p.get('team_name')
+                nm, tn = p['player_name'], p.get('team_name')
                 if nm not in selected_names and (not tn or team_counter[tn] < 11):
                     sel.append(p)
                     selected_names.add(nm)
@@ -2651,43 +2649,49 @@ def generate_team(current_user_email, match_id):
                 attempts += 1
             return sel
 
-        # 9) Fill each role to its quota
+        # 9) Fill quotas
         team += fill(batsmen,    quotas['batsman'])
         team += fill(bowlers,    quotas['bowler'])
         team += fill(allrounders,quotas['allrounder'])
         team += fill(keepers,    quotas['keeper'])
 
-        # 10) Must have 10 before final slot
-        if len(team) < sum({'batsman':4,'bowler':3,'allrounder':2,'keeper':1}.values()):
+        # 10) Check 10 players before final slot
+        if len(team) < sum([4,3,2,1]):
             logging.error("🧠 pick_team: couldn't reach base roster of 10")
             return None
 
-        # 11) Final slot (never a second keeper)
+        # 11) Final slot (no second keeper)
         import random as _r
         remaining = [p for p in pool if p['player_name'] not in selected_names]
         _r.shuffle(remaining)
         for p in remaining:
             if p['role'] == 'keeper':
                 continue
-            nm = p['player_name']
-            tn = p.get('team_name')
+            nm, tn = p['player_name'], p.get('team_name')
             if nm not in selected_names and (not tn or team_counter[tn] < 11):
                 team.append(p)
                 selected_names.add(nm)
                 break
 
-        # 12) Exactly 11 required
+        # 12) Validate 11 players
         if len(team) != 11:
             logging.error("🧠 pick_team: final roster not size 11")
             return None
 
-        # 13) Mark C/VC flags if provided
+        # ─── New Captain & Vice Logic ──────────────────────────────
+        if not captain:
+            cap = random.choice(team)
+        if not vice_captain:
+            candidates = [p for p in team if p['player_name'] != cap['player_name']]
+            vc = random.choice(candidates) if candidates else cap
+
         for p in team:
-            p['is_captain']      = (p['player_name'] == captain)
-            p['is_vice_captain'] = (p['player_name'] == vice_captain)
+            p['is_captain']      = (p['player_name'] == cap['player_name'])
+            p['is_vice_captain'] = (p['player_name'] == vc['player_name'])
 
         logging.warning(f"✅ pick_team generated: {[p['player_name'] for p in team]}")
         return team
+
 
     # ─── Main Handler ─────────────────────────────────────────────────
     try:
