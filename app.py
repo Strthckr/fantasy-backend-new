@@ -2567,11 +2567,10 @@ def generate_team(current_user_email, match_id):
     if request.method == 'OPTIONS':
         return '', 204
 
-        def pick_team(pool, must_have=[]):
-            import random
-            import time
-            import logging
-            from collections import Counter
+    # ✅ Define the function here — no extra indentation
+    def pick_team(pool, must_have=[]):
+        import random, time, logging
+        from collections import Counter
 
 
         logging.warning(f"➡️ Must-have: {must_have}")
