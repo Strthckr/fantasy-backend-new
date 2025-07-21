@@ -2832,20 +2832,53 @@ def generate_team(current_user_email, match_id):
 @token_required
 def get_players(current_user_email, match_id):
     try:
-        cur = db.cursor()
+        # read contest_id to calculate "% taken" among joined teams
+        contest_id = request.args.get('contest_id', type=int)
+
+        # use a dict cursor for easier enrichment
+        cur = db.cursor(dictionary=True)
         cur.execute("""
           SELECT id, player_name, role
           FROM players
           WHERE match_id = %s
         """, (match_id,))
-        players = [
-            {
-                "id": r[0],
-                "player_name": r[1],
-                "role": r[2]
-            } for r in cur.fetchall()
-        ]
+        players = cur.fetchall()
+
+        # initialize counts
+        for p in players:
+            p['taken_count']   = 0
+            p['taken_percent'] = 0
+
+        # if contest_id supplied, compute how many joined teams picked each player
+        if contest_id:
+            # total teams already entered in this contest
+            cur.execute(
+                "SELECT COUNT(*) AS total FROM entries WHERE contest_id = %s",
+                (contest_id,)
+            )
+            total = cur.fetchone()['total'] or 0
+
+            if total > 0:
+                for p in players:
+                    # count entries where this player appears in teams.players JSON
+                    cur.execute("""
+                      SELECT COUNT(*) AS cnt
+                      FROM entries e
+                      JOIN teams t ON e.team_id = t.id
+                      WHERE e.contest_id = %s
+                        AND JSON_CONTAINS(
+                              t.players,
+                              JSON_OBJECT('player_name', %s),
+                              '$'
+                            )
+                    """, (contest_id, p['player_name']))
+                    cnt = cur.fetchone()['cnt'] or 0
+
+                    p['taken_count']   = cnt
+                    p['taken_percent'] = round(cnt * 100 / total)
+
         return jsonify({"players": players}), 200
+
     except Exception as e:
         app.logger.exception(e)
         return jsonify({"message": "Failed to load players"}), 500
