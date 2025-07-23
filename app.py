@@ -2941,10 +2941,13 @@ def get_teams_for_match(current_user_email, match_id):
 
         # Get all teams the user created for this match
         cur.execute("""
-            SELECT id AS team_id, team_name, players
-            FROM teams
-            WHERE match_id = %s AND user_id = %s
-        """, (match_id, user_id))
+    SELECT t.id AS team_id, t.team_name, t.strength_score, t.created_at
+    FROM teams t
+    JOIN contests c ON t.contest_id = c.id
+    JOIN matches m ON c.match_id = m.id
+    WHERE m.id = %s AND t.user_id = %s
+""", (match_id, user_id))
+
         rows = cur.fetchall()
 
         # Format team data
