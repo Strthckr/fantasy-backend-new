@@ -3062,6 +3062,47 @@ def delete_teams_bulk(current_user_email):
     db.commit()
     return jsonify({ "message": f"{deleted} teams deleted." })
 
+@app.route('/contest/<int:contest_id>/user-teams', methods=['GET', 'OPTIONS'])
+@token_required
+def get_user_teams_for_contest(current_user_email, contest_id):
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    try:
+        cur = db.cursor(dictionary=True)
+
+        # Step 1: Get user ID from email
+        cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+        user_row = cur.fetchone()
+        if not user_row:
+            return jsonify({"message": "User not found"}), 404
+        user_id = user_row["id"]
+
+        # Step 2: Fetch teams for this contest and user
+        cur.execute("""
+            SELECT id AS team_id, team_name, players, strength_score, rating, team_style
+            FROM teams
+            WHERE contest_id = %s AND user_id = %s
+        """, (contest_id, user_id))
+        rows = cur.fetchall()
+
+        # Step 3: Format and return response
+        teams = []
+        for row in rows:
+            teams.append({
+                "team_id": row["team_id"],
+                "team_name": row["team_name"],
+                "players": json.loads(row["players"]) if row["players"] else [],
+                "strength_score": row.get("strength_score"),
+                "rating": row.get("rating"),
+                "team_style": row.get("team_style")
+            })
+
+        return jsonify({"teams": teams}), 200
+
+    except Exception as e:
+        app.logger.exception("🛑 Error in get_user_teams_for_contest")
+        return jsonify({"message": "Internal Server Error"}), 500
 
 
 
