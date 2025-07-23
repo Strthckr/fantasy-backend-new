@@ -265,40 +265,42 @@ now = datetime.utcnow()
 
 
 # ----------  JOIN CONTEST  ----------
-@app.route('/join_contest', methods=['POST'])
+@app.route('/contest/<int:contest_id>/join', methods=['OPTIONS', 'POST'])
 @token_required
-def join_contest(current_user_email):
-    """
-    Body: { "contest_id": 8, "team_id": 36 }
-    Deduct entry fee, add a row in entries (with timestamp), bump joined_users.
-    """
-    data = request.get_json()
-    contest_id = data.get('contest_id')
-    team_id = data.get('team_id')
+def join_contest_by_url(current_user_email, contest_id):
+    # 1) Handle CORS preflight
+    if request.method == 'OPTIONS':
+        # token_required already adds the correct CORS headers
+        return '', 204
 
-    if not contest_id or not team_id:
-        return jsonify({"message": "Contest ID and Team ID required"}), 400
+    # 2) Parse body (only team_id required—the contest_id comes from the URL)
+    data = request.get_json() or {}
+    team_id = data.get('team_id')
+    if not team_id:
+        return jsonify({"message": "Team ID required"}), 400
 
     cur = cursor
 
-    # Get user_id from email
+    # 3) Get user_id from email
     cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
     row = cur.fetchone()
     if not row:
         return jsonify({"message": "User not found"}), 404
     user_id = row[0]
 
-    # Validate team ownership
+    # 4) Validate team ownership
     cur.execute("""
         SELECT id FROM teams
         WHERE id = %s AND user_id = %s AND contest_id = %s
     """, (team_id, user_id, contest_id))
-    team = cur.fetchone()
-    if not team:
+    if not cur.fetchone():
         return jsonify({"message": "Invalid team for this user and contest"}), 400
 
-    # Contest details
-    cur.execute("SELECT entry_fee, joined_users, max_users FROM contests WHERE id=%s", (contest_id,))
+    # 5) Contest details & capacity check
+    cur.execute(
+        "SELECT entry_fee, joined_users, max_users FROM contests WHERE id=%s",
+        (contest_id,)
+    )
     row = cur.fetchone()
     if not row:
         return jsonify({"message": "Contest not found"}), 404
@@ -306,28 +308,33 @@ def join_contest(current_user_email):
     if joined >= max_users:
         return jsonify({"message": "Contest full"}), 400
 
-    # Wallet balance
+    # 6) Wallet balance check
     cur.execute("SELECT balance FROM wallets WHERE user_id=%s", (user_id,))
-    bal = cur.fetchone()[0]
-    if bal < entry_fee:
+    balance = cur.fetchone()[0]
+    if balance < entry_fee:
         return jsonify({"message": "Insufficient balance"}), 403
 
-    # Deduct and join contest
-    cur.execute("UPDATE wallets SET balance = balance - %s WHERE user_id=%s", (entry_fee, user_id))
-    cur.execute("UPDATE contests SET joined_users = joined_users + 1 WHERE id=%s", (contest_id,))
-    cur.execute("""
-        INSERT INTO entries (user_id, team_id, contest_id)
-        VALUES (%s, %s, %s)
-    """, (user_id, team_id, contest_id))  # joined_at is auto-filled by DB
-
-    cur.execute("""
-        INSERT INTO transactions (user_id, amount, type, description)
-        VALUES (%s, %s, 'debit', 'Joined contest')
-    """, (user_id, entry_fee))
+    # 7) Deduct fee, increment joined_users, insert entry & transaction
+    cur.execute(
+        "UPDATE wallets SET balance = balance - %s WHERE user_id=%s",
+        (entry_fee, user_id)
+    )
+    cur.execute(
+        "UPDATE contests SET joined_users = joined_users + 1 WHERE id=%s",
+        (contest_id,)
+    )
+    cur.execute(
+        "INSERT INTO entries (user_id, team_id, contest_id) VALUES (%s, %s, %s)",
+        (user_id, team_id, contest_id)
+    )
+    cur.execute(
+        "INSERT INTO transactions (user_id, amount, type, description) "
+        "VALUES (%s, %s, 'debit', 'Joined contest')",
+        (user_id, entry_fee)
+    )
 
     db.commit()
     return jsonify({"message": f"Joined! ₹{entry_fee} deducted."}), 200
-
 
 # # Create Contest API
 # @app.route('/admin/create_contest', methods=['POST'])
