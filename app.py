@@ -2923,42 +2923,43 @@ def user_entries(current_user_email, contest_id):
 
 
 
-@app.route('/user/team/<int:team_id>', methods=['GET', 'OPTIONS'])
+@app.route('/match/<int:match_id>/user-teams', methods=['GET', 'OPTIONS'])
 @token_required
-def get_user_team(current_user_email, team_id):
+def get_teams_for_match(current_user_email, match_id):
     if request.method == 'OPTIONS':
-        return '', 204  # Handle CORS preflight
+        return '', 204
 
     try:
         cur = db.cursor(dictionary=True)
 
-        # Find the logged-in user's ID
+        # Find user ID from email
         cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
         user_row = cur.fetchone()
         if not user_row:
             return jsonify({"message": "User not found"}), 404
         user_id = user_row["id"]
 
-        # Retrieve the team if it belongs to the user
+        # Get all teams the user created for this match
         cur.execute("""
-            SELECT team_name, players
+            SELECT id AS team_id, team_name, players
             FROM teams
-            WHERE id = %s AND user_id = %s
-        """, (team_id, user_id))
-        row = cur.fetchone()
-        if not row:
-            return jsonify({"message": "Team not found"}), 404
+            WHERE match_id = %s AND user_id = %s
+        """, (match_id, user_id))
+        rows = cur.fetchall()
 
-        import json
-        players = json.loads(row["players"]) if row["players"] else []
+        # Format team data
+        team_list = []
+        for row in rows:
+            team_list.append({
+                "team_id": row["team_id"],
+                "team_name": row["team_name"],
+                "players": json.loads(row["players"]) if row["players"] else []
+            })
 
-        return jsonify({
-            "team_name": row["team_name"],
-            "players": players
-        }), 200
+        return jsonify({"teams": team_list}), 200
 
     except Exception as e:
-        app.logger.exception("🛑 Failed to load team:")
+        app.logger.exception("🛑 Failed to fetch teams for match:")
         return jsonify({"message": "Internal Server Error"}), 500
 
 
