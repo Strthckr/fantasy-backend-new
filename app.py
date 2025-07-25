@@ -50,38 +50,45 @@ cursor = db.cursor()
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        # Step 1: Allow CORS preflight requests without checking JWT
         if request.method == 'OPTIONS':
-            resp = make_response('', 204)  # No Content
-            # Allow headers for cross-origin support
+            resp = make_response('', 204)
             resp.headers['Access-Control-Allow-Origin'] = 'http://localhost:3000'
             resp.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
             resp.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+            resp.headers['Access-Control-Allow-Credentials'] = 'true'
             return resp
 
-        # Step 2: Check for Authorization header and extract token
         token = None
         auth_header = request.headers.get('Authorization', '')
         if auth_header.startswith("Bearer "):
-            token = auth_header.split(" ", 1)[1]  # Extract token after 'Bearer'
+            token = auth_header.split(" ", 1)[1]
 
-        # Step 3: If token missing, deny access
         if not token:
-            return jsonify({'message': 'Token is missing!'}), 403
+            response = jsonify({'message': 'Token is missing!'})
+            response.status_code = 403
+            response.headers['Access-Control-Allow-Origin'] = 'http://localhost:3000'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            return response
 
         try:
-            # Step 4: Decode the token using the app's secret key
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
-            current_user_email = data['email']  # Extract email from token
+            current_user_email = data['email']
         except jwt.ExpiredSignatureError:
-            return jsonify({'message': 'Token has expired! Please login again.'}), 401
+            response = jsonify({'message': 'Token has expired!'})
+            response.status_code = 401
+            response.headers['Access-Control-Allow-Origin'] = 'http://localhost:3000'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            return response
         except jwt.InvalidTokenError:
-            return jsonify({'message': 'Invalid token!'}), 401
+            response = jsonify({'message': 'Invalid token!'})
+            response.status_code = 401
+            response.headers['Access-Control-Allow-Origin'] = 'http://localhost:3000'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            return response
 
-        # Step 5: Proceed to the actual route, passing email to it
         return f(current_user_email, *args, **kwargs)
-
     return decorated
+
 
 # ─── ADMIN CHECK FUNCTION ──────────────────────────────────────────────────────
 # Helper to check if a given user email belongs to an admin
