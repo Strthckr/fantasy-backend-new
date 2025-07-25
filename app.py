@@ -50,45 +50,38 @@ cursor = db.cursor()
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
+        # Step 1: Allow CORS preflight requests without checking JWT
         if request.method == 'OPTIONS':
-            resp = make_response('', 204)
+            resp = make_response('', 204)  # No Content
+            # Allow headers for cross-origin support
             resp.headers['Access-Control-Allow-Origin'] = 'http://localhost:3000'
             resp.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
             resp.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
-            resp.headers['Access-Control-Allow-Credentials'] = 'true'
             return resp
 
+        # Step 2: Check for Authorization header and extract token
         token = None
         auth_header = request.headers.get('Authorization', '')
         if auth_header.startswith("Bearer "):
-            token = auth_header.split(" ", 1)[1]
+            token = auth_header.split(" ", 1)[1]  # Extract token after 'Bearer'
 
+        # Step 3: If token missing, deny access
         if not token:
-            response = jsonify({'message': 'Token is missing!'})
-            response.status_code = 403
-            response.headers['Access-Control-Allow-Origin'] = 'http://localhost:3000'
-            response.headers['Access-Control-Allow-Credentials'] = 'true'
-            return response
+            return jsonify({'message': 'Token is missing!'}), 403
 
         try:
+            # Step 4: Decode the token using the app's secret key
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
-            current_user_email = data['email']
+            current_user_email = data['email']  # Extract email from token
         except jwt.ExpiredSignatureError:
-            response = jsonify({'message': 'Token has expired!'})
-            response.status_code = 401
-            response.headers['Access-Control-Allow-Origin'] = 'http://localhost:3000'
-            response.headers['Access-Control-Allow-Credentials'] = 'true'
-            return response
+            return jsonify({'message': 'Token has expired! Please login again.'}), 401
         except jwt.InvalidTokenError:
-            response = jsonify({'message': 'Invalid token!'})
-            response.status_code = 401
-            response.headers['Access-Control-Allow-Origin'] = 'http://localhost:3000'
-            response.headers['Access-Control-Allow-Credentials'] = 'true'
-            return response
+            return jsonify({'message': 'Invalid token!'}), 401
 
+        # Step 5: Proceed to the actual route, passing email to it
         return f(current_user_email, *args, **kwargs)
-    return decorated
 
+    return decorated
 
 # ─── ADMIN CHECK FUNCTION ──────────────────────────────────────────────────────
 # Helper to check if a given user email belongs to an admin
@@ -3117,6 +3110,44 @@ def get_user_teams_for_contest(current_user_email, contest_id):
     except Exception as e:
         app.logger.exception("🛑 Error in get_user_teams_for_contest")
         return jsonify({"message": "Internal Server Error"}), 500
+
+
+
+@app.route('/my_contest/<int:user_id>/<int:contest_id>', methods=['GET'])
+def get_my_contest(user_id, contest_id):
+    try:
+        cursor = db.cursor(dictionary=True)
+        query = """
+            SELECT  c.id,
+                    c.contest_name,
+                    c.entry_fee,
+                    c.prize_pool,
+                    c.joined_users,
+                    c.max_users,
+                    m.start_time,
+                    m.end_time,
+                    CASE
+                        WHEN NOW() <  m.start_time           THEN 'UPCOMING'
+                        WHEN NOW() BETWEEN m.start_time
+                                       AND m.end_time         THEN 'LIVE'
+                        ELSE                                     'COMPLETED'
+                    END AS status
+            FROM    contests  c
+            JOIN    entries   e ON c.id = e.contest_id
+            JOIN    matches   m ON m.id = c.match_id
+            WHERE   e.user_id = %s AND c.id = %s
+            ORDER BY m.start_time DESC;
+        """
+        cursor.execute(query, (user_id, contest_id))
+        contest = cursor.fetchone()
+        if contest:
+            return jsonify(contest), 200
+        else:
+            return jsonify({"message": "Contest not found for this user"}), 404
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
+
+
 
 
 
