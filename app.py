@@ -3036,6 +3036,18 @@ def join_contest_bulk(current_user_email):
     return jsonify({ "message": f"{inserted} teams joined successfully." })
 
 
+@app.route('/match/<int:match_id>', methods=['GET'])
+def get_match_by_id(match_id):
+    try:
+        cur = db.cursor(dictionary=True)
+        cur.execute("SELECT id, match_name AS name, start_time FROM matches WHERE id = %s", (match_id,))
+        match = cur.fetchone()
+        if match:
+            return jsonify(match), 200
+        else:
+            return jsonify({"message": "Match not found"}), 404
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
 
 
 
