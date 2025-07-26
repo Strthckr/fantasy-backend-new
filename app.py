@@ -3054,13 +3054,19 @@ def get_contest_by_id(contest_id):
     try:
         cur = db.cursor(dictionary=True)
         cur.execute("""
-            SELECT
-                id,
-                contest_name AS name,
-                entry_fee,
-                max_entries,
-                match_id
-            FROM contests
+            SELECT 
+                id, 
+                contest_name AS name, 
+                entry_fee, 
+                prize_pool,
+                start_time,
+                end_time,
+                match_id,
+                max_teams_per_user,
+                commission_percentage,
+                max_users,
+                joined_users
+            FROM contests 
             WHERE id = %s
         """, (contest_id,))
         contest = cur.fetchone()
