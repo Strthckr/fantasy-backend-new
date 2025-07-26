@@ -3049,6 +3049,27 @@ def get_match_by_id(match_id):
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
+@app.route('/contest/<int:contest_id>', methods=['GET'])
+def get_contest_by_id(contest_id):
+    try:
+        cur = db.cursor(dictionary=True)
+        cur.execute("""
+            SELECT
+                id,
+                contest_name AS name,
+                entry_fee,
+                max_entries,
+                match_id
+            FROM contests
+            WHERE id = %s
+        """, (contest_id,))
+        contest = cur.fetchone()
+        if contest:
+            return jsonify(contest), 200
+        else:
+            return jsonify({"message": "Contest not found"}), 404
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
 
 
 @app.route('/delete_teams', methods=['POST'])
