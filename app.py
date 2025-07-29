@@ -1229,6 +1229,7 @@ def get_contests(match_id):
     
 
 
+
 # 3️⃣  Contest details / leaderboard -------
 @app.route('/contests/<int:contest_id>/details', methods=['GET'])
 @token_required
@@ -3195,6 +3196,55 @@ WHERE c.id = %s
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
+
+
+@app.route('/api/my-contest-entries/<int:user_id>/<int:contest_id>', methods=['GET'])
+def get_my_contest_entries(user_id, contest_id):
+    try:
+        cursor = db.cursor(dictionary=True)
+
+        # 1) Fetch each joined team entry
+        entries_sql = """
+            SELECT
+                ce.team_id,
+                ce.entry_fee,
+                ce.joined_count
+            FROM contest_entries ce
+            WHERE ce.user_id    = %s
+              AND ce.contest_id = %s
+        """
+        cursor.execute(entries_sql, (user_id, contest_id))
+        joined_teams = cursor.fetchall()  # [{team_id, entry_fee, joined_count}, …]
+
+        # 2) Compute total bet money in the DB for accuracy
+        total_sql = """
+            SELECT IFNULL(SUM(entry_fee * joined_count), 0) AS total_bet_money
+            FROM contest_entries
+            WHERE user_id    = %s
+              AND contest_id = %s
+        """
+        cursor.execute(total_sql, (user_id, contest_id))
+        total_bet_money = cursor.fetchone().get('total_bet_money', 0)
+
+        # 3) (Optional) Fetch contest-level entry_fee if you need it on the front end
+        contest_sql = """
+            SELECT entry_fee
+            FROM contests
+            WHERE id = %s
+        """
+        cursor.execute(contest_sql, (contest_id,))
+        contest = cursor.fetchone()
+        contest_entry_fee = contest.get('entry_fee', 0) if contest else 0
+
+        return jsonify({
+            "joinedTeams": joined_teams,
+            "totalBetMoney": float(total_bet_money),
+            "contestEntryFee": float(contest_entry_fee)
+        }), 200
+
+    except Exception as err:
+        app.logger.error(f"Error in get_my_contest_entries: {err}")
+        return jsonify({"error": str(err)}), 500
 
 
 
