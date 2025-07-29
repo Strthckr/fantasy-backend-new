@@ -3169,24 +3169,22 @@ def get_my_contest(user_id, contest_id):
         cursor = db.cursor(dictionary=True)
         query = """
             SELECT  c.id,
-                    c.contest_name,
-                    c.entry_fee,
-                    c.prize_pool,
-                    c.joined_users,
-                    c.max_users,
-                    m.start_time,
-                    m.end_time,
-                    CASE
-                        WHEN NOW() <  m.start_time           THEN 'UPCOMING'
-                        WHEN NOW() BETWEEN m.start_time
-                                       AND m.end_time         THEN 'LIVE'
-                        ELSE                                     'COMPLETED'
-                    END AS status
-            FROM    contests  c
-            JOIN    entries   e ON c.id = e.contest_id
-            JOIN    matches   m ON m.id = c.match_id
-            WHERE   e.user_id = %s AND c.id = %s
-            ORDER BY m.start_time DESC;
+        c.contest_name,
+        c.entry_fee,
+        c.prize_pool,
+        c.joined_users,
+        c.max_users,
+        m.start_time,
+        m.end_time,
+        CASE
+            WHEN NOW() < m.start_time THEN 'UPCOMING'
+            WHEN NOW() BETWEEN m.start_time AND m.end_time THEN 'LIVE'
+            ELSE 'COMPLETED'
+        END AS status
+FROM contests c
+JOIN matches m ON m.id = c.match_id
+WHERE c.id = %s
+
         """
         cursor.execute(query, (user_id, contest_id))
         contest = cursor.fetchone()
@@ -3196,7 +3194,6 @@ def get_my_contest(user_id, contest_id):
             return jsonify({"message": "Contest not found for this user"}), 404
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
-
 
 
 
