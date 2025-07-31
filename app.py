@@ -3248,6 +3248,104 @@ def get_my_contest_entries(user_id, contest_id):
 
 
 
+@app.route('/match/<int:match_id>/players', methods=['GET'])
+@token_required
+def get_players(current_user_email, match_id):
+    """
+    Returns all players for both sides of a match.
+    Optional query param: ?contest_id=123 to get selection stats.
+    """
+    contest_id = request.args.get('contest_id', type=int)
+    cur = mysql.connection.cursor()
+
+    # a) fetch match_name
+    cur.execute("SELECT match_name FROM matches WHERE id = %s", (match_id,))
+    match = cur.fetchone()
+    if not match:
+        return jsonify({'error': 'Match not found'}), 404
+
+    # b) parse "TeamA vs TeamB"
+    sides = [s.strip() for s in re.split(r'[^A-Za-z ]+', match['match_name']) if s.strip()]
+
+    # c) load players for those sides (or fallback by match_id)
+    if len(sides) == 2:
+        sql = """
+          SELECT id, player_name, role, team_name, is_playing, position
+          FROM players
+          WHERE team_name IN (%s, %s)
+          ORDER BY is_playing DESC, position ASC
+        """
+        params = (sides[0], sides[1])
+    else:
+        sql = """
+          SELECT id, player_name, role, team_name, is_playing, position
+          FROM players
+          WHERE match_id = %s
+          ORDER BY is_playing DESC, position ASC
+        """
+        params = (match_id,)
+
+    cur.execute(sql, params)
+    players = cur.fetchall()
+
+    # d) initialize stats
+    for p in players:
+        p['taken_count']   = 0
+        p['taken_percent'] = 0
+
+    # e) if contest_id supplied, compute counts & percentages
+    if contest_id:
+        cur.execute("SELECT COUNT(*) AS total FROM entries WHERE contest_id = %s", (contest_id,))
+        total = cur.fetchone().get('total', 0) or 0
+
+        if total:
+            for p in players:
+                cur.execute("""
+                  SELECT COUNT(*) AS cnt
+                  FROM entries e
+                  JOIN teams t ON e.team_id = t.id
+                  WHERE e.contest_id = %s
+                    AND JSON_CONTAINS(
+                          t.players,
+                          JSON_OBJECT('player_name', %s),
+                          '$'
+                        )
+                """, (contest_id, p['player_name']))
+                cnt = cur.fetchone().get('cnt', 0) or 0
+                p['taken_count']   = cnt
+                p['taken_percent'] = round(cnt * 100 / total)
+
+    return jsonify({'players': players}), 
+
+
+
+@app.route('/api/matches/<int:match_id>/contest/<int:contest_id>/generate-ai-team', methods=['POST'])
+@token_required
+def generate_ai_team(current_user_email, match_id, contest_id):
+    """
+    Generates an AI-based team for a given match and contest.
+    This is a placeholder. Replace with actual logic as needed.
+    """
+    cur = mysql.connection.cursor()
+
+    # Example: Select top 11 players based on is_playing and position
+    cur.execute("""
+        SELECT id, player_name, role, team_name, is_playing, position
+        FROM players
+        WHERE match_id = %s
+        ORDER BY is_playing DESC, position ASC
+        LIMIT 11
+    """, (match_id,))
+
+    players = cur.fetchall()
+    
+    # You can customize team generation logic here
+    team = players  # For now, just return top 11 players
+
+    return jsonify({'team': team}), 200
+
+
+
 
 @app.route('/test_env')
 def test_env():
