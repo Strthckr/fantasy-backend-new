@@ -1766,6 +1766,8 @@ def admin_get_matches(current_user_email):
 
 
 
+import re
+
 @app.route('/admin/create_match', methods=['POST'])
 @token_required
 def admin_create_match(current_user_email):
@@ -1781,59 +1783,57 @@ def admin_create_match(current_user_email):
         match_name = data['match_name']
         start_time = data['start_time']
         end_time = data['end_time']
-        status = data.get('status', 'upcoming')
+        status = data.get('status', 'UPCOMING')
 
         # 1. Insert match
-        cur = db.cursor(dictionary=True)
+        cur = db.cursor()
         cur.execute("""
             INSERT INTO matches (match_name, start_time, end_time, status)
             VALUES (%s, %s, %s, %s)
         """, (match_name, start_time, end_time, status))
         match_id = cur.lastrowid
 
-        # 2. Extract team codes from match_name
-        sides = [s.strip().lower() for s in match_name.lower().split("vs")]
+        # 2. Extract team names from match_name using strict "vs"
+        sides = [s.strip().lower() for s in re.split(r'\s+vs\s+|\s+VS\s+|\s+Vs\s+', match_name) if s.strip()]
         if len(sides) != 2:
-            return jsonify({"message": "❌ Could not parse 2 teams from match_name"}), 400
+            return jsonify({"message": f"Could not parse 2 teams from match_name: {match_name}"}), 400
 
         team_map = {
-            "ind": "India",
-            "pak": "Pakistan",
-            "aus": "Australia",
-            "eng": "England",
-            "sa": "South Africa",
-            "nz": "New Zealand",
-            "sl": "Sri Lanka",
-            "ban": "Bangladesh",
-            "afg": "Afghanistan",
-            "wi": "West Indies",
-            "zim": "Zimbabwe",
-            "nam": "Namibia",
-            "uae": "UAE",
-            "nepal": "Nepal",
-            "ire": "Ireland",
-            "sco": "Scotland",
-            "ned": "Netherlands"
+            "india": "India", "ind": "India",
+            "pakistan": "Pakistan", "pak": "Pakistan",
+            "australia": "Australia", "aus": "Australia",
+            "england": "England", "eng": "England",
+            "south africa": "South Africa", "sa": "South Africa",
+            "new zealand": "New Zealand", "nz": "New Zealand",
+            "sri lanka": "Sri Lanka", "sl": "Sri Lanka",
+            "bangladesh": "Bangladesh", "ban": "Bangladesh",
+            "afghanistan": "Afghanistan", "afg": "Afghanistan",
+            "west indies": "West Indies", "wi": "West Indies",
+            "zimbabwe": "Zimbabwe", "zim": "Zimbabwe",
+            "ireland": "Ireland", "ire": "Ireland",
+            "netherlands": "Netherlands", "ned": "Netherlands",
+            "uae": "UAE", "scotland": "Scotland", "oman": "Oman", "nepal": "Nepal", "namibia": "Namibia"
         }
 
         team1 = team_map.get(sides[0])
         team2 = team_map.get(sides[1])
 
         if not team1 or not team2:
-            return jsonify({"message": f"❌ Unknown teams in match name: {match_name}"}), 400
+            return jsonify({"message": f"Unknown teams in match name: {match_name}"}), 400
 
-        # 3. Copy players from reference
+        # 3. Fetch players for these two teams from any existing match
+        cur = db.cursor(dictionary=True)
         cur.execute("""
-            SELECT player_name, role, team_name, credit_value, is_playing, position,
-                   fantasy_points, batting_style, bowling_style, nationality,
+            SELECT player_name, role, team_name, credit_value, is_playing, position, 
+                   fantasy_points, batting_style, bowling_style, nationality, 
                    player_type, team_id, image, country
             FROM players
             WHERE team_name IN (%s, %s)
         """, (team1, team2))
-
         players = cur.fetchall()
+
         if not players:
-            return jsonify({"message": f"❌ No players found for {team1} and {team2}"}), 404
+            return jsonify({"message": f"No players found for teams {team1} and {team2} in DB"}), 404
 
         for p in players:
             cur.execute("""
@@ -1850,11 +1850,13 @@ def admin_create_match(current_user_email):
             ))
 
         db.commit()
-        return jsonify({"message": "✅ Match and players added", "match_id": match_id}), 201
+        return jsonify({"message": "✅ Match and players added successfully", "match_id": match_id}), 201
 
     except Exception as e:
         db.rollback()
-        app.logger.exception(e)
+        import traceback
+        traceback.print_exc()
+        app.logger.error(f"🔴 Error creating match: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -3349,51 +3351,6 @@ def get_players_for_ai_page(current_user_email, match_id, contest_id):
 
 
 
-@app.route('/api/matches', methods=['POST'])
-@token_required
-def create_match(current_user_email):
-    data = request.get_json()
-    match_name = data.get('match_name')
-    start_time = data.get('start_time')
-    end_time = data.get('end_time')
-    status = data.get('status', 'upcoming')
-
-    cur = mysql.connection.cursor(dictionary=True)
-
-    # 1. Insert the match
-    cur.execute("""
-        INSERT INTO matches (match_name, start_time, end_time, status)
-        VALUES (%s, %s, %s, %s)
-    """, (match_name, start_time, end_time, status))
-    mysql.connection.commit()
-
-    # 2. Get the new match_id
-    match_id = cur.lastrowid
-
-    # 3. Parse match_name
-    sides = [s.strip().lower() for s in re.split(r'[^A-Za-z]+', match_name) if s.strip()]
-    
-    if len(sides) != 2:
-        return jsonify({'error': 'Invalid match_name format'}), 400
-
-    team1, team2 = sides
-
-    # 4. Insert template players for both teams into players table
-    cur.execute("""
-        INSERT INTO players (
-          match_id, player_name, role, team_name, is_playing, fantasy_points,
-          batting_style, bowling_style, nationality, position,
-          player_type, team_id, credit_value, image, country
-        )
-        SELECT %s, player_name, role, team_name, is_playing, fantasy_points,
-               batting_style, bowling_style, nationality, position,
-               player_type, team_id, credit_value, image, country
-        FROM template_players
-        WHERE LOWER(team_name) IN (%s, %s)
-    """, (match_id, team1, team2))
-    mysql.connection.commit()
-
-    return jsonify({'message': 'Match and players created', 'match_id': match_id}), 201
 
 
 
