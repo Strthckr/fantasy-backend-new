@@ -2849,7 +2849,7 @@ def generate_team(current_user_email, match_id):
 # 3. List players for a match
 @app.route('/match/<int:match_id>/players', methods=['GET'])
 @token_required
-def get_players(current_user_email, match_id):
+def get_players_with_contest_stats(current_user_email, match_id):
     try:
         # read contest_id to calculate "% taken" among joined teams
         contest_id = request.args.get('contest_id', type=int)
@@ -2865,12 +2865,11 @@ def get_players(current_user_email, match_id):
 
         # initialize counts
         for p in players:
-            p['taken_count']   = 0
+            p['taken_count'] = 0
             p['taken_percent'] = 0
 
         # if contest_id supplied, compute how many joined teams picked each player
         if contest_id:
-            # total teams already entered in this contest
             cur.execute(
                 "SELECT COUNT(*) AS total FROM entries WHERE contest_id = %s",
                 (contest_id,)
@@ -2879,7 +2878,6 @@ def get_players(current_user_email, match_id):
 
             if total > 0:
                 for p in players:
-                    # count entries where this player appears in teams.players JSON
                     cur.execute("""
                       SELECT COUNT(*) AS cnt
                       FROM entries e
@@ -2893,7 +2891,7 @@ def get_players(current_user_email, match_id):
                     """, (contest_id, p['player_name']))
                     cnt = cur.fetchone()['cnt'] or 0
 
-                    p['taken_count']   = cnt
+                    p['taken_count'] = cnt
                     p['taken_percent'] = round(cnt * 100 / total)
 
         return jsonify({"players": players}), 200
@@ -3250,13 +3248,14 @@ def get_my_contest_entries(user_id, contest_id):
 
 @app.route('/match/<int:match_id>/players', methods=['GET'])
 @token_required
-def get_players(current_user_email, match_id):
+def get_match_players_with_stats(current_user_email, match_id):
     """
     Returns all players for both sides of a match.
     Optional query param: ?contest_id=123 to get selection stats.
     """
+    import re
     contest_id = request.args.get('contest_id', type=int)
-    cur = mysql.connection.cursor()
+    cur = mysql.connection.cursor(dictionary=True)
 
     # a) fetch match_name
     cur.execute("SELECT match_name FROM matches WHERE id = %s", (match_id,))
@@ -3315,13 +3314,16 @@ def get_players(current_user_email, match_id):
                 p['taken_count']   = cnt
                 p['taken_percent'] = round(cnt * 100 / total)
 
-    return jsonify({'players': players}), 
+    return jsonify({'players': players}), 200
 
 
 
 @app.route('/api/matches/<int:match_id>/contest/<int:contest_id>/players', methods=['GET'])
 @token_required
-def get_players_by_match_and_contest(current_user_email, match_id, contest_id):
+def get_players_for_ai_page(current_user_email, match_id, contest_id):
+    """
+    Returns all players for the given match and contest for AI team building.
+    """
     cur = mysql.connection.cursor(dictionary=True)
 
     cur.execute("""
@@ -3331,6 +3333,7 @@ def get_players_by_match_and_contest(current_user_email, match_id, contest_id):
     """, (match_id,))
 
     players = cur.fetchall()
+
     return jsonify(players), 200
 
 
