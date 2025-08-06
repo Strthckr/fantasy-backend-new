@@ -1783,59 +1783,49 @@ def admin_create_match(current_user_email):
         match_name = data['match_name']
         start_time = data['start_time']
         end_time = data['end_time']
-        status = data.get('status', 'UPCOMING')
+        status = data.get('status', 'upcoming')
 
-        # 1. Insert match
-        cur = db.cursor()
+        # Insert match
+        cur = db.cursor(dictionary=True)
         cur.execute("""
             INSERT INTO matches (match_name, start_time, end_time, status)
             VALUES (%s, %s, %s, %s)
         """, (match_name, start_time, end_time, status))
         match_id = cur.lastrowid
 
-        # 2. Extract team names from match_name using strict "vs"
-        sides = [s.strip().lower() for s in re.split(r'\s+vs\s+|\s+VS\s+|\s+Vs\s+', match_name) if s.strip()]
-        if len(sides) != 2:
-            return jsonify({"message": f"Could not parse 2 teams from match_name: {match_name}"}), 400
+        # Extract team names
+        sides = [s.strip().lower() for s in re.split(r'[^A-Za-z]+', match_name) if s.strip()]
+        if len(sides) < 2:
+            return jsonify({"message": "❌ Could not parse 2 teams from match_name"}), 400
 
         team_map = {
             "india": "India", "ind": "India",
             "pakistan": "Pakistan", "pak": "Pakistan",
             "australia": "Australia", "aus": "Australia",
             "england": "England", "eng": "England",
-            "south africa": "South Africa", "sa": "South Africa",
-            "new zealand": "New Zealand", "nz": "New Zealand",
-            "sri lanka": "Sri Lanka", "sl": "Sri Lanka",
-            "bangladesh": "Bangladesh", "ban": "Bangladesh",
-            "afghanistan": "Afghanistan", "afg": "Afghanistan",
-            "west indies": "West Indies", "wi": "West Indies",
-            "zimbabwe": "Zimbabwe", "zim": "Zimbabwe",
-            "ireland": "Ireland", "ire": "Ireland",
-            "netherlands": "Netherlands", "ned": "Netherlands",
-            "uae": "UAE", "scotland": "Scotland", "oman": "Oman", "nepal": "Nepal", "namibia": "Namibia"
+            "srilanka": "Sri Lanka", "sl": "Sri Lanka",
+            "southafrica": "South Africa", "sa": "South Africa",
+            "newzealand": "New Zealand", "nz": "New Zealand",
+            "bangladesh": "Bangladesh", "bd": "Bangladesh",
+            "westindies": "West Indies", "wi": "West Indies",
+            "afghanistan": "Afghanistan"
         }
 
         team1 = team_map.get(sides[0])
         team2 = team_map.get(sides[1])
-
         if not team1 or not team2:
-            return jsonify({"message": f"Unknown teams in match name: {match_name}"}), 400
+            return jsonify({"message": "❌ Unknown team(s) in match_name"}), 400
 
-        # 3. Fetch players for these two teams from any existing match
-        cur = db.cursor(dictionary=True)
+        # Copy players from template_players
         cur.execute("""
-            SELECT player_name, role, team_name, credit_value, is_playing, position, 
-                   fantasy_points, batting_style, bowling_style, nationality, 
-                   player_type, team_id, image, country
-            FROM players
+            SELECT * FROM template_players
             WHERE team_name IN (%s, %s)
         """, (team1, team2))
-        players = cur.fetchall()
+        template_players = cur.fetchall()
+        if not template_players:
+            return jsonify({"message": "❌ No template players found for these teams"}), 404
 
-        if not players:
-            return jsonify({"message": f"No players found for teams {team1} and {team2} in DB"}), 404
-
-        for p in players:
+        for p in template_players:
             cur.execute("""
                 INSERT INTO players (
                     match_id, player_name, role, team_name, credit_value, is_playing, position,
@@ -1843,20 +1833,19 @@ def admin_create_match(current_user_email):
                     player_type, team_id, image, country
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                match_id,
-                p['player_name'], p['role'], p['team_name'], p['credit_value'], p['is_playing'],
-                p['position'], p['fantasy_points'], p['batting_style'], p['bowling_style'],
-                p['nationality'], p['player_type'], p['team_id'], p['image'], p['country']
+                match_id, p['player_name'], p['role'], p['team_name'], p['credit_value'],
+                p['is_playing'], p['position'], p['fantasy_points'], p['batting_style'],
+                p['bowling_style'], p['nationality'], p['player_type'], p['team_id'],
+                p['image'], p['country']
             ))
 
         db.commit()
-        return jsonify({"message": "✅ Match and players added successfully", "match_id": match_id}), 201
+        return jsonify({"message": "✅ Match and players created", "match_id": match_id}), 201
 
     except Exception as e:
         db.rollback()
         import traceback
         traceback.print_exc()
-        app.logger.error(f"🔴 Error creating match: {e}")
         return jsonify({"error": str(e)}), 500
 
 
