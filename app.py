@@ -1919,6 +1919,37 @@ def admin_list_entries(current_user_email, contest_id):
         return jsonify({"error": str(err)}), 500
 
 
+@app.route('/admin/delete_match', methods=['POST'])
+@token_required
+def delete_match(current_user_email):
+    if not is_admin_user(current_user_email):
+        return jsonify({"message": "Unauthorized"}), 403
+
+    try:
+        data = request.get_json()
+        match_id = data.get('id')
+
+        if not match_id:
+            return jsonify({"message": "Missing match ID"}), 400
+
+        cur = db.cursor()
+
+        # Delete players associated with the match (optional but cleaner)
+        cur.execute("DELETE FROM players WHERE match_id = %s", (match_id,))
+
+        # Delete the match
+        cur.execute("DELETE FROM matches WHERE id = %s", (match_id,))
+        db.commit()
+
+        return jsonify({"message": "Match deleted successfully"}), 200
+
+    except Exception as e:
+        db.rollback()
+        app.logger.exception(e)
+        return jsonify({"message": "Internal server error"}), 500
+
+
+
 @app.route('/admin/team/<int:id>', methods=['GET'])
 @token_required
 def admin_team_details(current_user_email, id):
