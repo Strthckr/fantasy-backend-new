@@ -1763,7 +1763,7 @@ def admin_get_matches(current_user_email):
         return jsonify({"error": str(e)}), 500
 
 
-import re
+
 
 @app.route('/admin/create_match', methods=['POST'])
 @token_required
