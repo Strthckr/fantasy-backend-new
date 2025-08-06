@@ -3321,20 +3321,24 @@ def get_match_players_with_stats(current_user_email, match_id):
 @app.route('/api/matches/<int:match_id>/contest/<int:contest_id>/players', methods=['GET'])
 @token_required
 def get_players_for_ai_page(current_user_email, match_id, contest_id):
-    """
-    Returns all players for the given match and contest for AI team building.
-    """
-    cur = mysql.connection.cursor(dictionary=True)
+    try:
+        cur = db.cursor(dictionary=True)  # or mysql.connection.cursor(dictionary=True) based on your setup
 
-    cur.execute("""
-        SELECT id, player_name, role, team_name, credit_value, is_playing, position
-        FROM players
-        WHERE match_id = %s
-    """, (match_id,))
+        cur.execute("""
+            SELECT id, player_name, role, team_name, credit_value, is_playing, position
+            FROM players
+            WHERE match_id = %s
+        """, (match_id,))
 
-    players = cur.fetchall()
+        players = cur.fetchall()
+        return jsonify(players), 200
 
-    return jsonify(players), 200
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        app.logger.error(f"🔴 Error fetching players: {e}")
+        return jsonify({"message": "Internal Server Error"}), 500
+
 
 
 
