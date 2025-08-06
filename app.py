@@ -3319,30 +3319,20 @@ def get_players(current_user_email, match_id):
 
 
 
-@app.route('/api/matches/<int:match_id>/contest/<int:contest_id>/generate-ai-team', methods=['POST'])
+@app.route('/api/matches/<int:match_id>/contest/<int:contest_id>/players', methods=['GET'])
 @token_required
-def generate_ai_team(current_user_email, match_id, contest_id):
-    """
-    Generates an AI-based team for a given match and contest.
-    This is a placeholder. Replace with actual logic as needed.
-    """
-    cur = mysql.connection.cursor()
+def get_players_by_match_and_contest(current_user_email, match_id, contest_id):
+    cur = mysql.connection.cursor(dictionary=True)
 
-    # Example: Select top 11 players based on is_playing and position
     cur.execute("""
-        SELECT id, player_name, role, team_name, is_playing, position
+        SELECT id, player_name, role, team_name, credit_value, is_playing, position
         FROM players
         WHERE match_id = %s
-        ORDER BY is_playing DESC, position ASC
-        LIMIT 11
     """, (match_id,))
 
     players = cur.fetchall()
-    
-    # You can customize team generation logic here
-    team = players  # For now, just return top 11 players
+    return jsonify(players), 200
 
-    return jsonify({'team': team}), 200
 
 
 
