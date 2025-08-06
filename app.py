@@ -3341,6 +3341,53 @@ def get_players_for_ai_page(current_user_email, match_id, contest_id):
 
 
 
+@app.route('/api/matches', methods=['POST'])
+@token_required
+def create_match(current_user_email):
+    data = request.get_json()
+    match_name = data.get('match_name')
+    start_time = data.get('start_time')
+    end_time = data.get('end_time')
+    status = data.get('status', 'upcoming')
+
+    cur = mysql.connection.cursor(dictionary=True)
+
+    # 1. Insert the match
+    cur.execute("""
+        INSERT INTO matches (match_name, start_time, end_time, status)
+        VALUES (%s, %s, %s, %s)
+    """, (match_name, start_time, end_time, status))
+    mysql.connection.commit()
+
+    # 2. Get the new match_id
+    match_id = cur.lastrowid
+
+    # 3. Parse match_name
+    sides = [s.strip().lower() for s in re.split(r'[^A-Za-z]+', match_name) if s.strip()]
+    
+    if len(sides) != 2:
+        return jsonify({'error': 'Invalid match_name format'}), 400
+
+    team1, team2 = sides
+
+    # 4. Insert template players for both teams into players table
+    cur.execute("""
+        INSERT INTO players (
+          match_id, player_name, role, team_name, is_playing, fantasy_points,
+          batting_style, bowling_style, nationality, position,
+          player_type, team_id, credit_value, image, country
+        )
+        SELECT %s, player_name, role, team_name, is_playing, fantasy_points,
+               batting_style, bowling_style, nationality, position,
+               player_type, team_id, credit_value, image, country
+        FROM template_players
+        WHERE LOWER(team_name) IN (%s, %s)
+    """, (match_id, team1, team2))
+    mysql.connection.commit()
+
+    return jsonify({'message': 'Match and players created', 'match_id': match_id}), 201
+
+
 
 
 
