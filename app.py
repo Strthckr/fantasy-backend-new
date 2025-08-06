@@ -1933,30 +1933,35 @@ def delete_match(current_user_email):
 
         cur = db.cursor()
 
-        # Step 1: Delete entries associated with contests in this match
-        cur.execute("""
-            DELETE e FROM entries e
-            JOIN contests c ON e.contest_id = c.id
-            WHERE c.match_id = %s
-        """, (match_id,))
+        # Step 1: Get all contest_ids for this match
+        cur.execute("SELECT id FROM contests WHERE match_id = %s", (match_id,))
+        contest_ids = [row[0] for row in cur.fetchall()]
 
-        # Step 2: Delete contests of this match
-        cur.execute("DELETE FROM contests WHERE match_id = %s", (match_id,))
+        if contest_ids:
+            in_clause = ','.join(['%s'] * len(contest_ids))
 
-        # Step 3: Delete players of this match
+            # Step 2: Delete entries
+            cur.execute(f"DELETE FROM entries WHERE contest_id IN ({in_clause})", contest_ids)
+
+            # Step 3: Delete prize distributions
+            cur.execute(f"DELETE FROM prize_distributions WHERE contest_id IN ({in_clause})", contest_ids)
+
+            # Step 4: Delete contests
+            cur.execute(f"DELETE FROM contests WHERE id IN ({in_clause})", contest_ids)
+
+        # Step 5: Delete players of this match
         cur.execute("DELETE FROM players WHERE match_id = %s", (match_id,))
 
-        # Step 4: Delete the match
+        # Step 6: Delete match
         cur.execute("DELETE FROM matches WHERE id = %s", (match_id,))
 
         db.commit()
-        return jsonify({"message": "Match and related data deleted successfully"}), 200
+        return jsonify({"message": "Match and all related data deleted successfully"}), 200
 
     except Exception as e:
         db.rollback()
         app.logger.exception(e)
         return jsonify({"message": "Internal server error"}), 500
-
 
 
 @app.route('/admin/team/<int:id>', methods=['GET'])
