@@ -1928,20 +1928,29 @@ def delete_match(current_user_email):
     try:
         data = request.get_json()
         match_id = data.get('id')
-
         if not match_id:
             return jsonify({"message": "Missing match ID"}), 400
 
         cur = db.cursor()
 
-        # Delete players associated with the match (optional but cleaner)
+        # Step 1: Delete entries associated with contests in this match
+        cur.execute("""
+            DELETE e FROM entries e
+            JOIN contests c ON e.contest_id = c.id
+            WHERE c.match_id = %s
+        """, (match_id,))
+
+        # Step 2: Delete contests of this match
+        cur.execute("DELETE FROM contests WHERE match_id = %s", (match_id,))
+
+        # Step 3: Delete players of this match
         cur.execute("DELETE FROM players WHERE match_id = %s", (match_id,))
 
-        # Delete the match
+        # Step 4: Delete the match
         cur.execute("DELETE FROM matches WHERE id = %s", (match_id,))
-        db.commit()
 
-        return jsonify({"message": "Match deleted successfully"}), 200
+        db.commit()
+        return jsonify({"message": "Match and related data deleted successfully"}), 200
 
     except Exception as e:
         db.rollback()
