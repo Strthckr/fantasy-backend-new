@@ -1765,6 +1765,8 @@ def admin_get_matches(current_user_email):
 
 
 
+import re  # ✅ make sure this is at the top of your file
+
 @app.route('/admin/create_match', methods=['POST'])
 @token_required
 def admin_create_match(current_user_email):
@@ -1772,38 +1774,86 @@ def admin_create_match(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     data = request.get_json()
-    if not all(data.get(k) for k in ['team1', 'team2', 'start_time', 'end_time']):
+    required_fields = ['match_name', 'start_time', 'end_time']
+    if not all(data.get(k) for k in required_fields):
         return jsonify({"message": "Missing required fields"}), 400
 
     try:
-        team1 = data['team1']
-        team2 = data['team2']
-        match_name = f"{team1} vs {team2}"
+        match_name = data['match_name']
         start_time = data['start_time']
         end_time = data['end_time']
         status = data.get('status', 'UPCOMING')
 
         # 1. Insert match
-        cur = db.cursor()
+        cur = db.cursor(dictionary=True)  # ✅ FIX: return rows as dicts
         cur.execute("""
             INSERT INTO matches (match_name, start_time, end_time, status)
             VALUES (%s, %s, %s, %s)
         """, (match_name, start_time, end_time, status))
         match_id = cur.lastrowid
 
-        # 2. Copy players from any previous match for these two teams
+        # 2. Parse and map team names
+        sides = [s.strip().lower() for s in re.split(r'[^A-Za-z]+', match_name) if s.strip()]
+        if len(sides) != 2:
+            return jsonify({"message": "❌ Could not parse 2 teams from match_name"}), 400
+
+        team_map = {
+            "india": "India",
+            "ind": "India",
+            "pakistan": "Pakistan",
+            "pak": "Pakistan",
+            "australia": "Australia",
+            "aus": "Australia",
+            "england": "England",
+            "eng": "England",
+            "southafrica": "South Africa",
+            "sa": "South Africa",
+            "newzealand": "New Zealand",
+            "nz": "New Zealand",
+            "srilanka": "Sri Lanka",
+            "sl": "Sri Lanka",
+            "bangladesh": "Bangladesh",
+            "bd": "Bangladesh",
+            "afghanistan": "Afghanistan",
+            "afg": "Afghanistan",
+            "westindies": "West Indies",
+            "wi": "West Indies",
+            "zimbabwe": "Zimbabwe",
+            "zim": "Zimbabwe",
+            "namibia": "Namibia",
+            "uae": "UAE",
+            "nepal": "Nepal",
+            "ireland": "Ireland",
+            "scotland": "Scotland",
+            "netherlands": "Netherlands"
+        }
+
+        team1 = team_map.get(sides[0])
+        team2 = team_map.get(sides[1])
+
+        if not team1 or not team2:
+            return jsonify({"message": f"❌ Unknown teams in match name: {match_name}"}), 400
+
+        # 3. Ensure player data exists for both teams
         cur.execute("""
-            SELECT player_name, role, team_name, credit_value, is_playing, position,
-                   fantasy_points, batting_style, bowling_style, nationality,
+            SELECT * FROM players
+            WHERE team_name IN (%s, %s)
+            LIMIT 1
+        """, (team1, team2))
+        sample_exists = cur.fetchone()
+        if not sample_exists:
+            return jsonify({"message": f"❌ No players found for teams {team1} and {team2} in DB"}), 404
+
+        # 4. Fetch and copy player data into new match
+        cur.execute("""
+            SELECT player_name, role, team_name, credit_value, is_playing, position, 
+                   fantasy_points, batting_style, bowling_style, nationality, 
                    player_type, team_id, image, country
             FROM players
             WHERE team_name IN (%s, %s)
         """, (team1, team2))
 
         players = cur.fetchall()
-        if not players:
-            return jsonify({"message": f"No players found for {team1} or {team2}"}), 404
-
         for p in players:
             cur.execute("""
                 INSERT INTO players (
@@ -1819,118 +1869,15 @@ def admin_create_match(current_user_email):
             ))
 
         db.commit()
-        return jsonify({"message": "Match and players added successfully", "match_id": match_id}), 201
+        return jsonify({
+            "message": "✅ Match and players added successfully",
+            "match_id": match_id
+        }), 201
 
     except Exception as e:
         db.rollback()
         app.logger.exception(e)
         return jsonify({"error": str(e)}), 500
-
-
-@app.route('/admin/update_match', methods=['POST'])
-@token_required
-def admin_update_match(current_user_email):
-    if not is_admin_user(current_user_email):
-        return jsonify({"message": "Unauthorized"}), 403
-
-    data = request.get_json()
-    match_id = data.get("id")
-    if not match_id:
-        return jsonify({"message": "Match ID is required"}), 400
-
-    fields = []
-    values = []
-    for key in ['match_name', 'start_time', 'end_time', 'status']:
-        if key in data:
-            fields.append(f"{key} = %s")
-            values.append(data[key])
-
-    if not fields:
-        return jsonify({"message": "Nothing to update"}), 400
-
-    values.append(match_id)
-
-    try:
-        cursor = db.cursor()
-        cursor.execute(f"UPDATE matches SET {', '.join(fields)} WHERE id = %s", tuple(values))
-        db.commit()
-        return jsonify({"message": "Match updated successfully"}), 200
-    except Exception as e:
-        db.rollback()
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/admin/delete_match', methods=['POST'])
-@token_required
-def admin_delete_match(current_user_email):
-    if not is_admin_user(current_user_email):
-        return jsonify({"message": "Unauthorized"}), 403
-
-    data = request.get_json()
-    match_id = data.get("id")
-    if not match_id:
-        return jsonify({"message": "Match ID is required"}), 400
-
-    try:
-        cursor = db.cursor()
-        cursor.execute("DELETE FROM matches WHERE id = %s", (match_id,))
-        db.commit()
-        return jsonify({"message": f"Match ID {match_id} deleted"}), 200
-    except Exception as e:
-        db.rollback()
-        return jsonify({"error": str(e)}), 500
-
-
-
-@app.route('/admin/get_contests', methods=['GET'])
-@token_required
-def admin_get_contests(current_user_email):
-    if not is_admin_user(current_user_email):
-        return jsonify({"message": "Unauthorized"}), 403
-
-    try:
-        cursor = db.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT id, contest_name, match_id, entry_fee, prize_pool,
-                   max_users, joined_users,
-                   commission_percentage, max_teams_per_user,
-                   status, start_time, end_time
-            FROM contests
-            ORDER BY id DESC
-        """)
-        return jsonify(cursor.fetchall()), 200
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
-
-@app.route('/admin/update_contest', methods=['POST'])
-@token_required
-def admin_update_contest(current_user_email):
-    if not is_admin_user(current_user_email):
-        return jsonify({"message": "Unauthorized"}), 403
-
-    data = request.get_json()
-    contest_id = data.get('id')
-    if not contest_id:
-        return jsonify({"message": "Missing contest ID"}), 400
-
-    fields = []
-    values = []
-
-    for key in ['contest_name', 'entry_fee', 'max_users', 'commission_percentage', 'max_teams_per_user', 'status']:
-        if key in data:
-            fields.append(f"{key} = %s")
-            values.append(data[key])
-
-    values.append(contest_id)
-
-    try:
-        cursor = db.cursor()
-        cursor.execute(f"UPDATE contests SET {', '.join(fields)} WHERE id = %s", tuple(values))
-        db.commit()
-        return jsonify({"message": "Contest updated successfully!"})
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
 
 
 
