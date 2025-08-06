@@ -1763,6 +1763,8 @@ def admin_get_matches(current_user_email):
         return jsonify({"error": str(e)}), 500
 
 
+import re
+
 @app.route('/admin/create_match', methods=['POST'])
 @token_required
 def admin_create_match(current_user_email):
@@ -1770,15 +1772,16 @@ def admin_create_match(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     data = request.get_json()
-    required_fields = ['match_name', 'start_time', 'end_time']
-    if not all(data.get(k) for k in required_fields):
+    if not all(data.get(k) for k in ['team1', 'team2', 'start_time', 'end_time']):
         return jsonify({"message": "Missing required fields"}), 400
 
     try:
-        match_name = data['match_name']
+        team1 = data['team1']
+        team2 = data['team2']
+        match_name = f"{team1} vs {team2}"
         start_time = data['start_time']
         end_time = data['end_time']
-        status = data.get('status', 'upcoming')
+        status = data.get('status', 'UPCOMING')
 
         # 1. Insert match
         cur = db.cursor()
@@ -1788,46 +1791,19 @@ def admin_create_match(current_user_email):
         """, (match_name, start_time, end_time, status))
         match_id = cur.lastrowid
 
-        # 2. Extract team names from match_name
-        sides = [s.strip().lower() for s in re.split(r'[^A-Za-z]+', match_name) if s.strip()]
-        if len(sides) != 2:
-            return jsonify({"message": "Could not parse 2 teams from match_name"}), 400
-
-        team_map = {
-            "india": "India",
-            "ind": "India",
-            "pakistan": "Pakistan",
-            "pak": "Pakistan",
-            "australia": "Australia",
-            "aus": "Australia",
-            "england": "England",
-            "eng": "England"
-        }
-        team1 = team_map.get(sides[0])
-        team2 = team_map.get(sides[1])
-
-        if not team1 or not team2:
-            return jsonify({"message": f"Unknown teams in match name: {match_name}"}), 400
-
-        # 3. Copy players from a reference match where both teams exist
+        # 2. Copy players from any previous match for these two teams
         cur.execute("""
-            SELECT * FROM players
-            WHERE team_name IN (%s, %s)
-            LIMIT 1
-        """, (team1, team2))
-        sample_exists = cur.fetchone()
-        if not sample_exists:
-            return jsonify({"message": f"No players found for teams {team1} and {team2} in DB"}), 404
-
-        cur.execute("""
-            SELECT player_name, role, team_name, credit_value, is_playing, position, 
-                   fantasy_points, batting_style, bowling_style, nationality, 
+            SELECT player_name, role, team_name, credit_value, is_playing, position,
+                   fantasy_points, batting_style, bowling_style, nationality,
                    player_type, team_id, image, country
             FROM players
             WHERE team_name IN (%s, %s)
         """, (team1, team2))
 
         players = cur.fetchall()
+        if not players:
+            return jsonify({"message": f"No players found for {team1} or {team2}"}), 404
+
         for p in players:
             cur.execute("""
                 INSERT INTO players (
