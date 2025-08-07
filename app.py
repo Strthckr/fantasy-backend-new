@@ -2744,11 +2744,24 @@ def generate_team(current_user_email, match_id):
         user_id = user["id"]
 
         # 3) Load player pool
-        cur.execute(
-            "SELECT id, player_name, role, credit_value, team_name "
-            "FROM players WHERE match_id=%s",
-            (match_id,)
-        )
+        cur.execute("""
+    SELECT 
+        id, 
+        player_name, 
+        LOWER(
+            CASE 
+                WHEN role = 'Wicket-Keeper' THEN 'keeper'
+                WHEN role = 'All-Rounder' THEN 'allrounder'
+                ELSE role
+            END
+        ) AS role,
+        credit_value, 
+        team_name
+    FROM players 
+    WHERE match_id=%s
+""", (match_id,))
+
+        
         pool = cur.fetchall()
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
