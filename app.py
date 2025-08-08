@@ -65,12 +65,6 @@ print("✅ SECRET_KEY loaded:", app.config['SECRET_KEY'])
 # ─── DATABASE CONNECTION SETUP ─────────────────────────────────────────────────
 # Connect to MySQL using credentials from .env file
 def get_db_connection():
-    print("Connecting to DB with:")
-    print("Host:", os.getenv('DB_HOST'))
-    print("Port:", os.getenv('DB_PORT'))
-    print("User:", os.getenv('DB_USER'))
-    print("Database:", os.getenv('DB_NAME'))
-
     return mysql.connector.connect(
         host=os.getenv('DB_HOST'),
         port=int(os.getenv('DB_PORT', 3306)),
@@ -145,45 +139,36 @@ print("🔔 /login route is registered")
 # Login API
 @app.route('/login', methods=['POST'])
 def login():
-    try:
-        data = request.get_json()
-        email    = data.get('email')
-        password = data.get('password')
+    data = request.get_json()
+    email    = data.get('email')
+    password = data.get('password')
 
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
+    # use dict cursor so we can return id + email
+    cursor = db.cursor(dictionary=True)
+    cursor.execute("SELECT id, email, password FROM users WHERE email = %s", (email,))
+    user = cursor.fetchone()
 
-        cursor.execute("SELECT id, email, password FROM users WHERE email = %s", (email,))
-        user = cursor.fetchone()
+    if not user:
+        return jsonify({"message": "User not found"}), 404
 
-        cursor.close()
-        conn.close()
+    stored_hash = user["password"]
+    if not bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8")):
+        return jsonify({"message": "Invalid credentials"}), 401
 
-        if not user:
-            return jsonify({"message": "User not found"}), 404
+    token = jwt.encode(
+        {"email": email, "exp": datetime.utcnow() + timedelta(days=7)},
+        app.config["SECRET_KEY"],
+        algorithm="HS256",
+    )
+    if isinstance(token, bytes):
+        token = token.decode("utf-8")
 
-        stored_hash = user["password"]
-        if not bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8")):
-            return jsonify({"message": "Invalid credentials"}), 401
-
-        token = jwt.encode(
-            {"email": email, "exp": datetime.utcnow() + timedelta(days=7)},
-            app.config["SECRET_KEY"],
-            algorithm="HS256",
-        )
-        if isinstance(token, bytes):
-            token = token.decode("utf-8")
-
-        return jsonify({
-            "token": token,
-            "id":    user["id"],
-            "email": user["email"]
-        }), 200
-
-    except Exception as e:
-        print(f"[ERROR] Login failed: {e}")
-        traceback.print_exc()
-        return jsonify({'error': 'Internal Server Error'}), 500
+    # 👇 NEW: also return id & email
+    return jsonify({
+        "token": token,
+        "id":    user["id"],
+        "email": user["email"]
+    }), 200
 
 
 
