@@ -3408,25 +3408,21 @@ def pick_team(match_id):
 @celery.task()
 def generate_ai_teams_task(match_id, contest_id, user_id, count):
     created = 0
-
     for i in range(count):
         try:
             team = pick_team(match_id)
 
             if not team or len(team) != 11:
-                print(f"[WARNING] Skipping invalid team #{i+1}")
                 continue
 
             captain = next((p['player_name'] for p in team if p.get('is_captain')), None)
             vice_captain = next((p['player_name'] for p in team if p.get('is_vice_captain')), None)
 
-            conn = get_db_connection()
-            cursor = conn.cursor()
-
             insert_query = """
                 INSERT INTO teams (team_name, players, user_id, contest_id, total_points, captain, vice_captain)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
             """
+            cursor = conn.cursor()
             cursor.execute(insert_query, (
                 f"AI Team {i+1}",
                 json.dumps(team),
@@ -3436,19 +3432,16 @@ def generate_ai_teams_task(match_id, contest_id, user_id, count):
                 captain,
                 vice_captain
             ))
-
             conn.commit()
-            cursor.close()
-            conn.close()
-
             created += 1
-
         except Exception as e:
             print(f"[ERROR] Failed to create team {i+1}: {e}")
             traceback.print_exc()
             continue
 
-    return {"message": f"{created} AI teams created successfully."}
+    return {"message": f"{created} teams created successfully."}
+
+
 
 @app.route('/api/ai/generate', methods=['POST'])
 def trigger_ai_team_generation():
