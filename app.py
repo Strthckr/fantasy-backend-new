@@ -888,30 +888,11 @@ def distribute_prizes(current_user_email, contest_id):
 
 
 
-@app.route('/wallet_balance', methods=['GET'])
-@token_required
-def wallet_balance(current_user_email):
-    try:
-        with mysql_cursor() as cursor:
-            cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-            user = cursor.fetchone()
-            if not user:
-                return jsonify({"message": "User not found"}), 404
-            user_id = user[0]
-
-            cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (user_id,))
-            wallet = cursor.fetchone()
-            if not wallet:
-                return jsonify({"message": "Wallet not found"}), 404
-
-        return jsonify({"balance": float(wallet[0])})
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
 
 
 @app.route('/declare_winner', methods=['POST'])
 @token_required
-def declare_winner(current_user_email):
+def declare_winner_api(current_user_email):
     data = request.get_json()
     contest_id = data.get('contest_id')
     user_id = data.get('user_id')
