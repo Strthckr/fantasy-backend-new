@@ -713,41 +713,6 @@ def wallet_balance(current_user_email):
         return jsonify({"error": str(err)}), 500
 
 
-@app.route('/declare_winner', methods=['POST'])
-@token_required
-def declare_winner(current_user_email):
-    data = request.get_json()
-    contest_id = data.get('contest_id')
-    user_id = data.get('user_id')
-    amount = data.get('amount')
-
-    if not contest_id or not user_id or amount is None:
-        return jsonify({"message": "Missing contest_id, user_id, or amount"}), 400
-
-    try:
-        with mysql_cursor() as cursor:
-            cursor.execute("SELECT id FROM contests WHERE id = %s", (contest_id,))
-            contest = cursor.fetchone()
-            if not contest:
-                return jsonify({"message": "Contest not found"}), 404
-
-            cursor.execute("SELECT id FROM users WHERE id = %s", (user_id,))
-            user = cursor.fetchone()
-            if not user:
-                return jsonify({"message": "User not found"}), 404
-
-            cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (user_id,))
-            wallet = cursor.fetchone()
-            if not wallet:
-                return jsonify({"message": "Wallet not found"}), 404
-
-            new_balance = wallet[0] + amount
-            cursor.execute("UPDATE wallets SET balance = %s WHERE user_id = %s", (new_balance, user_id))
-
-            db.commit()
-            return jsonify({"message": f"Prize money ₹{amount} added to user {user_id} wallet!"})
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
 
 
 @app.route('/profile', methods=['GET'])
@@ -921,34 +886,6 @@ def distribute_prizes(current_user_email, contest_id):
 
 
 
-@app.route('/declare_winners/<int:contest_id>', methods=['POST'])
-@token_required
-def declare_winners(current_user_email, contest_id):
-    try:
-        with mysql_cursor(dictionary=True) as cursor:
-            query = """
-                SELECT t.id AS team_id, SUM(s.points) AS total_points
-                FROM teams t
-                JOIN entries e ON t.id = e.team_id
-                JOIN scores s ON e.id = s.entry_id
-                WHERE e.contest_id = %s
-                GROUP BY t.id
-                ORDER BY total_points DESC
-                LIMIT 3
-            """
-            cursor.execute(query, (contest_id,))
-            winners = cursor.fetchall()
-
-            for rank, winner in enumerate(winners, start=1):
-                cursor.execute("""
-                    INSERT INTO winners (contest_id, team_id, total_points, rank_position)
-                    VALUES (%s, %s, %s, %s)
-                """, (contest_id, winner['team_id'], winner['total_points'], rank))
-
-        db.commit()
-        return jsonify({"message": "Winners declared successfully!", "winners": winners})
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
 
 
 @app.route('/wallet_balance', methods=['GET'])
