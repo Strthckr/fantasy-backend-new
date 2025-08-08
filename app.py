@@ -88,6 +88,37 @@ def mysql_cursor(dictionary=False):
         conn.close()
 
 
+# 🧠 Updated: pick_team using context-managed MySQL connection
+def pick_team(match_id):
+    try:
+        with mysql_cursor(dictionary=True) as cursor:
+            cursor.execute("""
+                SELECT * FROM players
+                WHERE match_id = %s
+                ORDER BY RAND()
+                LIMIT 11
+            """, (match_id,))
+            players = cursor.fetchall()
+
+        if len(players) != 11:
+            return None
+
+        # Randomly assign captain/vice
+        captain_index = random.randint(0, 10)
+        vice_captain_index = (captain_index + 1) % 11
+
+        for i, player in enumerate(players):
+            player['is_captain'] = (i == captain_index)
+            player['is_vice_captain'] = (i == vice_captain_index)
+            player['player_id'] = player['id']  # Ensure compatibility
+
+        return players
+
+    except Exception as e:
+        print(f"Error in pick_team(): {e}")
+        return None
+
+
 
 # ─── JWT TOKEN PROTECTION DECORATOR ────────────────────────────────────────────
 def token_required(f):
@@ -129,10 +160,10 @@ def token_required(f):
 # ─── ADMIN CHECK FUNCTION ──────────────────────────────────────────────────────
 # Helper to check if a given user email belongs to an admin
 def is_admin_user(email):
-    cursor = db.cursor()
-    cursor.execute("SELECT is_admin FROM users WHERE email = %s", (email,))
-    result = cursor.fetchone()
-    return result and result[0] == 1  # Return True if is_admin == 1
+    with mysql_cursor() as cursor:
+        cursor.execute("SELECT is_admin FROM users WHERE email = %s", (email,))
+        result = cursor.fetchone()
+        return result and result[0] == 1  # Return True if is_admin == 1
 
 # ─── CORS PREFLIGHT HELPER (OPTIONAL) ──────────────────────────────────────────
 # Used to return proper headers in preflight responses manually
@@ -197,18 +228,18 @@ def signup():
     hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
     try:
-        cursor.execute(
-            "INSERT INTO users (username, email, password) VALUES (%s, %s, %s)",
-            (username, email, hashed_password.decode('utf-8'))
-        )
-        user_id = cursor.lastrowid
+        with mysql_cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO users (username, email, password) VALUES (%s, %s, %s)",
+                (username, email, hashed_password.decode('utf-8'))
+            )
+            user_id = cursor.lastrowid
 
-        cursor.execute(
-            "INSERT INTO wallets (user_id, balance) VALUES (%s, %s)",
-            (user_id, 200.00)
-        )
+            cursor.execute(
+                "INSERT INTO wallets (user_id, balance) VALUES (%s, %s)",
+                (user_id, 200.00)
+            )
 
-        db.commit()
         return jsonify({"message": "User registered and wallet created!"}), 201
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 400
@@ -217,9 +248,10 @@ def signup():
 @token_required
 def dashboard(current_user_email):
     try:
-        cursor = db.cursor()
-        cursor.execute("SELECT username FROM users WHERE email = %s", (current_user_email,))
-        user = cursor.fetchone()
+        with mysql_cursor() as cursor:
+            cursor.execute("SELECT username FROM users WHERE email = %s", (current_user_email,))
+            user = cursor.fetchone()
+
         if user:
             return jsonify({"message": f"Welcome to your dashboard, {user[0]}!"})
         else:
@@ -422,22 +454,22 @@ def join_contest_by_url(current_user_email, contest_id):
 def list_all_contests():
     """Return every contest in the system (ordered by soonest start)."""
     try:
-        cursor = db.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT id,
-                   name,               -- contest name
-                   match_id,
-                   entry_fee,
-                   prize_pool,
-                   max_users,
-                   joined_users,
-                   status,
-                   start_time,
-                   end_time
-            FROM contests
-            ORDER BY start_time ASC
-        """)
-        return jsonify(cursor.fetchall())
+        with mysql_cursor(dictionary=True) as cursor:
+            cursor.execute("""
+                SELECT id,
+                       name,               -- contest name
+                       match_id,
+                       entry_fee,
+                       prize_pool,
+                       max_users,
+                       joined_users,
+                       status,
+                       start_time,
+                       end_time
+                FROM contests
+                ORDER BY start_time ASC
+            """)
+            return jsonify(cursor.fetchall())
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
     
@@ -452,56 +484,57 @@ def my_contests(user_id):
     Output → { "contests": [ {...}, … ] }
     """
     try:
-        cursor = db.cursor(dictionary=True)
-
-        query = """
-            SELECT  c.id,
-                    c.contest_name,
-                    c.entry_fee,
-                    c.prize_pool,
-                    c.joined_users,
-                    c.max_users,
-                    m.start_time,
-                    m.end_time,
-                    CASE
-                        WHEN NOW() <  m.start_time           THEN 'UPCOMING'
-                        WHEN NOW() BETWEEN m.start_time
-                                       AND m.end_time         THEN 'LIVE'
-                        ELSE                                     'COMPLETED'
-                    END AS status
-            FROM    contests  c
-            JOIN    entries   e ON c.id = e.contest_id
-            JOIN    matches   m ON m.id = c.match_id
-            WHERE   e.user_id = %s
-            ORDER BY m.start_time DESC;
-        """
-
-        cursor.execute(query, (user_id,))
-        contests = cursor.fetchall()         # list[dict]
-        return jsonify({"contests": contests}), 200
+        with mysql_cursor(dictionary=True) as cursor:
+            query = """
+                SELECT  c.id,
+                        c.contest_name,
+                        c.entry_fee,
+                        c.prize_pool,
+                        c.joined_users,
+                        c.max_users,
+                        m.start_time,
+                        m.end_time,
+                        CASE
+                            WHEN NOW() <  m.start_time           THEN 'UPCOMING'
+                            WHEN NOW() BETWEEN m.start_time
+                                           AND m.end_time         THEN 'LIVE'
+                            ELSE                                     'COMPLETED'
+                        END AS status
+                FROM    contests  c
+                JOIN    entries   e ON c.id = e.contest_id
+                JOIN    matches   m ON m.id = c.match_id
+                WHERE   e.user_id = %s
+                ORDER BY m.start_time DESC;
+            """
+            cursor.execute(query, (user_id,))
+            contests = cursor.fetchall()
+            return jsonify({"contests": contests}), 200
 
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
+
+
 # Leaderboard API
 @app.route('/leaderboard/<int:contest_id>', methods=['GET'])
 def leaderboard(contest_id):
     try:
-        cursor = db.cursor(dictionary=True)
-        query = """
-            SELECT t.team_name, SUM(s.points) AS total_points
-            FROM teams t
-            JOIN entries e ON t.id = e.team_id
-            JOIN scores s ON e.id = s.entry_id
-            WHERE e.contest_id = %s
-            GROUP BY t.team_name
-            ORDER BY total_points DESC
-            LIMIT 10
-        """
-        cursor.execute(query, (contest_id,))
-        results = cursor.fetchall()
-        return jsonify(results)
+        with mysql_cursor(dictionary=True) as cursor:
+            query = """
+                SELECT t.team_name, SUM(s.points) AS total_points
+                FROM teams t
+                JOIN entries e ON t.id = e.team_id
+                JOIN scores s ON e.id = s.entry_id
+                WHERE e.contest_id = %s
+                GROUP BY t.team_name
+                ORDER BY total_points DESC
+                LIMIT 10
+            """
+            cursor.execute(query, (contest_id,))
+            results = cursor.fetchall()
+            return jsonify(results)
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
+
 
 # Add Points API
 @app.route('/add_points', methods=['POST'])
@@ -514,15 +547,15 @@ def add_points():
         return jsonify({"message": "Missing entry_id or points"}), 400
 
     try:
-        cursor = db.cursor()
-        cursor.execute(
-            "INSERT INTO scores (entry_id, points) VALUES (%s, %s)",
-            (entry_id, points)
-        )
-        db.commit()
+        with mysql_cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO scores (entry_id, points) VALUES (%s, %s)",
+                (entry_id, points)
+            )
         return jsonify({"message": "Points added successfully!"}), 201
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
+
 
 # Update Team API
 @app.route('/update_team/<int:team_id>', methods=['POST'])  # Can change to PUT later
@@ -537,60 +570,60 @@ def update_team(current_user_email, team_id):
 
     try:
         players_json = json.dumps(players)
-        cursor = db.cursor()
-        cursor.execute("UPDATE teams SET team_name = %s, players = %s WHERE id = %s",
-                       (team_name, players_json, team_id))
-        db.commit()
+        with mysql_cursor() as cursor:
+            cursor.execute(
+                "UPDATE teams SET team_name = %s, players = %s WHERE id = %s",
+                (team_name, players_json, team_id)
+            )
         return jsonify({"message": "Team updated successfully!"})
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
+
 
 # Delete Team API
 @app.route('/delete_team/<int:team_id>', methods=['POST'])
 @token_required
 def delete_team(current_user_email, team_id):
     try:
-        cursor = db.cursor()
+        with mysql_cursor() as cursor:
+            # Delete scores linked to entries of this team
+            cursor.execute("""
+                DELETE scores FROM scores
+                JOIN entries ON scores.entry_id = entries.id
+                WHERE entries.team_id = %s
+            """, (team_id,))
 
-        # Delete scores linked to entries of this team
-        cursor.execute("""
-            DELETE scores FROM scores
-            JOIN entries ON scores.entry_id = entries.id
-            WHERE entries.team_id = %s
-        """, (team_id,))
+            # Delete entries linked to this team
+            cursor.execute("DELETE FROM entries WHERE team_id = %s", (team_id,))
 
-        # Delete entries linked to this team
-        cursor.execute("DELETE FROM entries WHERE team_id = %s", (team_id,))
-
-        # Delete the team
-        cursor.execute("DELETE FROM teams WHERE id = %s", (team_id,))
-
-        db.commit()
+            # Delete the team
+            cursor.execute("DELETE FROM teams WHERE id = %s", (team_id,))
+            
         return jsonify({"message": "Team and related entries deleted successfully!"})
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
+
+
 
 # Delete Contest API
 @app.route('/delete_contest/<int:contest_id>', methods=['POST'])
 @token_required
 def delete_contest(current_user_email, contest_id):
     try:
-        cursor = db.cursor()
+        with mysql_cursor() as cursor:
+            # Delete scores linked to entries in this contest
+            cursor.execute("""
+                DELETE scores FROM scores
+                JOIN entries ON scores.entry_id = entries.id
+                WHERE entries.contest_id = %s
+            """, (contest_id,))
 
-        # Delete scores linked to entries in this contest
-        cursor.execute("""
-            DELETE scores FROM scores
-            JOIN entries ON scores.entry_id = entries.id
-            WHERE entries.contest_id = %s
-        """, (contest_id,))
+            # Delete entries linked to this contest
+            cursor.execute("DELETE FROM entries WHERE contest_id = %s", (contest_id,))
 
-        # Delete entries linked to this contest
-        cursor.execute("DELETE FROM entries WHERE contest_id = %s", (contest_id,))
-
-        # Delete the contest
-        cursor.execute("DELETE FROM contests WHERE id = %s", (contest_id,))
-
-        db.commit()
+            # Delete the contest
+            cursor.execute("DELETE FROM contests WHERE id = %s", (contest_id,))
+            
         return jsonify({"message": "Contest and all related data deleted successfully!"})
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
@@ -610,23 +643,21 @@ def add_points_bulk(current_user_email):
         return jsonify({"message": "Input must be a list of entry_id and points"}), 400
 
     try:
-        cursor = db.cursor()
-        for item in entries_points:
-            entry_id = item.get('entry_id')
-            points = item.get('points')
+        with mysql_cursor() as cursor:
+            for item in entries_points:
+                entry_id = item.get('entry_id')
+                points = item.get('points')
 
-            if entry_id is None or points is None:
-                return jsonify({"message": "Each entry must have 'entry_id' and 'points'"}), 400
+                if entry_id is None or points is None:
+                    return jsonify({"message": "Each entry must have 'entry_id' and 'points'"}), 400
 
-            cursor.execute(
-                "INSERT INTO scores (entry_id, points) VALUES (%s, %s)",
-                (entry_id, points)
-            )
-        db.commit()
+                cursor.execute(
+                    "INSERT INTO scores (entry_id, points) VALUES (%s, %s)",
+                    (entry_id, points)
+                )
         return jsonify({"message": "Points added successfully for all entries!"}), 201
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
-
 
 
 
@@ -635,61 +666,51 @@ def add_points_bulk(current_user_email):
 @token_required
 def declare_winners(current_user_email, contest_id):
     try:
-        cursor = db.cursor(dictionary=True)
+        with mysql_cursor(dictionary=True) as cursor:
+            query = """
+                SELECT t.id AS team_id, SUM(s.points) AS total_points
+                FROM teams t
+                JOIN entries e ON t.id = e.team_id
+                JOIN scores s ON e.id = s.entry_id
+                WHERE e.contest_id = %s
+                GROUP BY t.id
+                ORDER BY total_points DESC
+                LIMIT 3
+            """
+            cursor.execute(query, (contest_id,))
+            winners = cursor.fetchall()
 
-        # Get top 3 teams from the leaderboard
-        query = """
-            SELECT t.id AS team_id, SUM(s.points) AS total_points
-            FROM teams t
-            JOIN entries e ON t.id = e.team_id
-            JOIN scores s ON e.id = s.entry_id
-            WHERE e.contest_id = %s
-            GROUP BY t.id
-            ORDER BY total_points DESC
-            LIMIT 3
-        """
-        cursor.execute(query, (contest_id,))
-        winners = cursor.fetchall()
+            for rank, winner in enumerate(winners, start=1):
+                cursor.execute("""
+                    INSERT INTO winners (contest_id, team_id, total_points, rank_position)
+                    VALUES (%s, %s, %s, %s)
+                """, (contest_id, winner['team_id'], winner['total_points'], rank))
 
-        # Insert winners into winners table
-        for rank, winner in enumerate(winners, start=1):
-            cursor.execute("""
-                INSERT INTO winners (contest_id, team_id, total_points, rank_position)
-                VALUES (%s, %s, %s, %s)
-            """, (contest_id, winner['team_id'], winner['total_points'], rank))
-
-        db.commit()
-        return jsonify({"message": "Winners declared successfully!", "winners": winners})
+            db.commit()
+            return jsonify({"message": "Winners declared successfully!", "winners": winners})
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
-
-
 
 
 @app.route('/wallet_balance', methods=['GET'])
 @token_required
 def wallet_balance(current_user_email):
     try:
-        cursor = db.cursor()
-        # Get user_id
-        cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-        user = cursor.fetchone()
-        if not user:
-            return jsonify({"message": "User not found"}), 404
-        user_id = user[0]
+        with mysql_cursor() as cursor:
+            cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+            user = cursor.fetchone()
+            if not user:
+                return jsonify({"message": "User not found"}), 404
+            user_id = user[0]
 
-        # Get wallet balance
-        cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (user_id,))
-        wallet = cursor.fetchone()
-        if not wallet:
-            return jsonify({"message": "Wallet not found"}), 404
+            cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (user_id,))
+            wallet = cursor.fetchone()
+            if not wallet:
+                return jsonify({"message": "Wallet not found"}), 404
 
-        return jsonify({"balance": float(wallet[0])})
+            return jsonify({"balance": float(wallet[0])})
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
-
-
-
 
 
 @app.route('/declare_winner', methods=['POST'])
@@ -704,54 +725,44 @@ def declare_winner(current_user_email):
         return jsonify({"message": "Missing contest_id, user_id, or amount"}), 400
 
     try:
-        cursor = db.cursor()
+        with mysql_cursor() as cursor:
+            cursor.execute("SELECT id FROM contests WHERE id = %s", (contest_id,))
+            contest = cursor.fetchone()
+            if not contest:
+                return jsonify({"message": "Contest not found"}), 404
 
-        # Check if contest exists
-        cursor.execute("SELECT id FROM contests WHERE id = %s", (contest_id,))
-        contest = cursor.fetchone()
-        if not contest:
-            return jsonify({"message": "Contest not found"}), 404
+            cursor.execute("SELECT id FROM users WHERE id = %s", (user_id,))
+            user = cursor.fetchone()
+            if not user:
+                return jsonify({"message": "User not found"}), 404
 
-        # Check if user exists
-        cursor.execute("SELECT id FROM users WHERE id = %s", (user_id,))
-        user = cursor.fetchone()
-        if not user:
-            return jsonify({"message": "User not found"}), 404
+            cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (user_id,))
+            wallet = cursor.fetchone()
+            if not wallet:
+                return jsonify({"message": "Wallet not found"}), 404
 
-        # Update wallet balance: add prize money
-        cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (user_id,))
-        wallet = cursor.fetchone()
-        if not wallet:
-            return jsonify({"message": "Wallet not found"}), 404
+            new_balance = wallet[0] + amount
+            cursor.execute("UPDATE wallets SET balance = %s WHERE user_id = %s", (new_balance, user_id))
 
-        new_balance = wallet[0] + amount
-        cursor.execute("UPDATE wallets SET balance = %s WHERE user_id = %s", (new_balance, user_id))
-
-        db.commit()
-        return jsonify({"message": f"Prize money ₹{amount} added to user {user_id} wallet!"})
+            db.commit()
+            return jsonify({"message": f"Prize money ₹{amount} added to user {user_id} wallet!"})
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
 
-
-# ------------------  PROFILE ROUTES  ------------------
-
 @app.route('/profile', methods=['GET'])
 @token_required
 def get_profile(current_user_email):
-    """
-    Return username & email of the logged-in user.
-    """
     try:
-        cur = db.cursor(dictionary=True)
-        cur.execute(
-            "SELECT username, email FROM users WHERE email = %s",
-            (current_user_email,)
-        )
-        user = cur.fetchone()
-        if user:
-            return jsonify(user)
-        return jsonify({"message": "User not found"}), 404
+        with mysql_cursor(dictionary=True) as cur:
+            cur.execute(
+                "SELECT username, email FROM users WHERE email = %s",
+                (current_user_email,)
+            )
+            user = cur.fetchone()
+            if user:
+                return jsonify(user)
+            return jsonify({"message": "User not found"}), 404
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
@@ -759,10 +770,6 @@ def get_profile(current_user_email):
 @app.route('/profile', methods=['PUT'])
 @token_required
 def update_profile(current_user_email):
-    """
-    Update username of the logged-in user.
-    Body JSON → { "username": "new_name" }
-    """
     data = request.get_json() or {}
     new_username = data.get('username')
 
@@ -770,70 +777,318 @@ def update_profile(current_user_email):
         return jsonify({"message": "Username is required"}), 400
 
     try:
-        cur = db.cursor()
-        cur.execute(
-            "UPDATE users SET username = %s WHERE email = %s",
-            (new_username, current_user_email)
-        )
-        db.commit()
-        return jsonify({"message": "Profile updated successfully"})
+        with mysql_cursor() as cur:
+            cur.execute(
+                "UPDATE users SET username = %s WHERE email = %s",
+                (new_username, current_user_email)
+            )
+            db.commit()
+            return jsonify({"message": "Profile updated successfully"})
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
-
 
 
 @app.route('/wallet', methods=['GET'])
 @token_required
 def wallet(current_user_email):
     try:
-        cursor = db.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT w.balance FROM wallets w
-            JOIN users u ON w.user_id = u.id
-            WHERE u.email = %s
-        """, (current_user_email,))
-        wallet = cursor.fetchone()
-        if wallet:
-            return jsonify({"balance": wallet['balance']})
-        else:
-            return jsonify({"message": "Wallet not found"}), 404
+        with mysql_cursor(dictionary=True) as cursor:
+            cursor.execute("""
+                SELECT w.balance FROM wallets w
+                JOIN users u ON w.user_id = u.id
+                WHERE u.email = %s
+            """, (current_user_email,))
+            wallet = cursor.fetchone()
+            if wallet:
+                return jsonify({"balance": wallet['balance']})
+            else:
+                return jsonify({"message": "Wallet not found"}), 404
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
-
-
-
-
 
 
 @app.route('/transactions', methods=['GET'])
 @token_required
 def get_transactions(current_user_email):
     try:
-        cursor = db.cursor(dictionary=True)
+        with mysql_cursor(dictionary=True) as cursor:
+            cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+            user = cursor.fetchone()
+            if not user:
+                return jsonify({"message": "User not found"}), 404
 
-        # ✅ Get user ID from current_user_email
-        cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-        user = cursor.fetchone()
-        if not user:
-            return jsonify({"message": "User not found"}), 404
+            user_id = user['id']
 
-        user_id = user['id']
+            cursor.execute("""
+                SELECT amount, type, description, created_at
+                FROM transactions
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+            """, (user_id,))
+            transactions = cursor.fetchall()
 
-        # ✅ Fetch transactions
-        cursor.execute("""
-            SELECT amount, type, description, created_at
-            FROM transactions
-            WHERE user_id = %s
-            ORDER BY created_at DESC
-        """, (user_id,))
-        transactions = cursor.fetchall()
+            return jsonify({"transactions": transactions})
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
 
-        return jsonify({"transactions": transactions})
+
+@app.route('/admin/distribute_prizes/<int:contest_id>', methods=['POST'])
+@token_required
+def distribute_prizes(current_user_email, contest_id):
+    if not is_admin_user(current_user_email):
+        return jsonify({"message": "Unauthorized"}), 403
+
+    try:
+        with mysql_cursor(dictionary=True) as cursor:
+            cursor.execute("SELECT prize_pool, status, commission_percentage FROM contests WHERE id = %s", (contest_id,))
+            contest = cursor.fetchone()
+
+            if not contest:
+                return jsonify({"message": "Contest not found"}), 404
+            if contest['status'] == 'prizes_distributed':
+                return jsonify({"message": "Prizes already distributed"}), 400
+
+            prize_pool = float(contest['prize_pool'])
+            commission_percentage = contest['commission_percentage'] or 0
+            commission_amount = prize_pool * (commission_percentage / 100)
+            prize_pool -= commission_amount
+
+            cursor.execute("""
+                INSERT INTO platform_earnings (contest_id, commission_amount)
+                VALUES (%s, %s)
+            """, (contest_id, commission_amount))
+
+            cursor.execute("""
+                SELECT rank_position, percentage
+                FROM prize_distributions
+                WHERE contest_id = %s
+                ORDER BY rank_position ASC
+            """, (contest_id,))
+            distributions = cursor.fetchall()
+
+            if not distributions:
+                return jsonify({"message": "No prize distribution set for this contest"}), 400
+
+            cursor.execute("""
+                SELECT t.id as team_id, t.user_id, t.total_points
+                FROM teams t
+                WHERE t.contest_id = %s
+                ORDER BY t.total_points DESC
+                LIMIT %s
+            """, (contest_id, len(distributions)))
+            teams = cursor.fetchall()
+
+            if not teams:
+                return jsonify({"message": "No teams found for this contest"}), 400
+
+            for idx, team in enumerate(teams):
+                rank = idx + 1
+                prize_percentage = float(next((d['percentage'] for d in distributions if d['rank_position'] == rank), 0))
+                prize_amount = prize_pool * (prize_percentage / 100)
+
+                cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (team['user_id'],))
+                wallet = cursor.fetchone()
+                if wallet is None:
+                    return jsonify({"message": f"Wallet not found for user_id {team['user_id']}"}), 404
+
+                new_balance = Decimal(str(wallet['balance'])) + Decimal(str(prize_amount))
+                cursor.execute("UPDATE wallets SET balance = %s WHERE user_id = %s", (new_balance, team['user_id']))
+
+                cursor.execute("""
+                    INSERT INTO transaction_history (user_id, amount, transaction_type, description)
+                    VALUES (%s, %s, 'credit', %s)
+                """, (team['user_id'], prize_amount, f'Prize for rank {rank} in contest {contest_id}'))
+
+                cursor.execute("""
+                    INSERT INTO notifications (user_id, message)
+                    VALUES (%s, %s)
+                """, (team['user_id'], f"🎉 You won ₹{prize_amount:.2f} in contest ID {contest_id} (Rank {rank})!"))
+
+            cursor.execute("UPDATE contests SET status = 'prizes_distributed' WHERE id = %s", (contest_id,))
+            db.commit()
+
+            return jsonify({
+                "message": f"Prizes distributed for contest {contest_id}",
+                "commission_collected": commission_amount
+            })
+
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
 
 
+
+
+
+
+@app.route('/declare_winners/<int:contest_id>', methods=['POST'])
+@token_required
+def declare_winners(current_user_email, contest_id):
+    try:
+        with mysql_cursor(dictionary=True) as cursor:
+            query = """
+                SELECT t.id AS team_id, SUM(s.points) AS total_points
+                FROM teams t
+                JOIN entries e ON t.id = e.team_id
+                JOIN scores s ON e.id = s.entry_id
+                WHERE e.contest_id = %s
+                GROUP BY t.id
+                ORDER BY total_points DESC
+                LIMIT 3
+            """
+            cursor.execute(query, (contest_id,))
+            winners = cursor.fetchall()
+
+            for rank, winner in enumerate(winners, start=1):
+                cursor.execute("""
+                    INSERT INTO winners (contest_id, team_id, total_points, rank_position)
+                    VALUES (%s, %s, %s, %s)
+                """, (contest_id, winner['team_id'], winner['total_points'], rank))
+
+        db.commit()
+        return jsonify({"message": "Winners declared successfully!", "winners": winners})
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
+
+
+@app.route('/wallet_balance', methods=['GET'])
+@token_required
+def wallet_balance(current_user_email):
+    try:
+        with mysql_cursor() as cursor:
+            cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+            user = cursor.fetchone()
+            if not user:
+                return jsonify({"message": "User not found"}), 404
+            user_id = user[0]
+
+            cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (user_id,))
+            wallet = cursor.fetchone()
+            if not wallet:
+                return jsonify({"message": "Wallet not found"}), 404
+
+        return jsonify({"balance": float(wallet[0])})
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
+
+
+@app.route('/declare_winner', methods=['POST'])
+@token_required
+def declare_winner(current_user_email):
+    data = request.get_json()
+    contest_id = data.get('contest_id')
+    user_id = data.get('user_id')
+    amount = data.get('amount')
+
+    if not contest_id or not user_id or amount is None:
+        return jsonify({"message": "Missing contest_id, user_id, or amount"}), 400
+
+    try:
+        with mysql_cursor() as cursor:
+            cursor.execute("SELECT id FROM contests WHERE id = %s", (contest_id,))
+            contest = cursor.fetchone()
+            if not contest:
+                return jsonify({"message": "Contest not found"}), 404
+
+            cursor.execute("SELECT id FROM users WHERE id = %s", (user_id,))
+            user = cursor.fetchone()
+            if not user:
+                return jsonify({"message": "User not found"}), 404
+
+            cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (user_id,))
+            wallet = cursor.fetchone()
+            if not wallet:
+                return jsonify({"message": "Wallet not found"}), 404
+
+            new_balance = wallet[0] + amount
+            cursor.execute("UPDATE wallets SET balance = %s WHERE user_id = %s", (new_balance, user_id))
+
+        db.commit()
+        return jsonify({"message": f"Prize money ₹{amount} added to user {user_id} wallet!"})
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
+
+
+@app.route('/profile', methods=['GET'])
+@token_required
+def get_profile(current_user_email):
+    try:
+        with mysql_cursor(dictionary=True) as cursor:
+            cursor.execute(
+                "SELECT username, email FROM users WHERE email = %s",
+                (current_user_email,)
+            )
+            user = cursor.fetchone()
+            if user:
+                return jsonify(user)
+            return jsonify({"message": "User not found"}), 404
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
+
+
+@app.route('/profile', methods=['PUT'])
+@token_required
+def update_profile(current_user_email):
+    data = request.get_json() or {}
+    new_username = data.get('username')
+
+    if not new_username:
+        return jsonify({"message": "Username is required"}), 400
+
+    try:
+        with mysql_cursor() as cursor:
+            cursor.execute(
+                "UPDATE users SET username = %s WHERE email = %s",
+                (new_username, current_user_email)
+            )
+        db.commit()
+        return jsonify({"message": "Profile updated successfully"})
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
+
+
+@app.route('/wallet', methods=['GET'])
+@token_required
+def wallet(current_user_email):
+    try:
+        with mysql_cursor(dictionary=True) as cursor:
+            cursor.execute("""
+                SELECT w.balance FROM wallets w
+                JOIN users u ON w.user_id = u.id
+                WHERE u.email = %s
+            """, (current_user_email,))
+            wallet = cursor.fetchone()
+            if wallet:
+                return jsonify({"balance": wallet['balance']})
+            else:
+                return jsonify({"message": "Wallet not found"}), 404
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
+
+
+@app.route('/transactions', methods=['GET'])
+@token_required
+def get_transactions(current_user_email):
+    try:
+        with mysql_cursor(dictionary=True) as cursor:
+            cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+            user = cursor.fetchone()
+            if not user:
+                return jsonify({"message": "User not found"}), 404
+
+            user_id = user['id']
+
+            cursor.execute("""
+                SELECT amount, type, description, created_at
+                FROM transactions
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+            """, (user_id,))
+            transactions = cursor.fetchall()
+
+        return jsonify({"transactions": transactions})
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
 
 
 from decimal import Decimal
@@ -841,86 +1096,76 @@ from decimal import Decimal
 @app.route('/admin/distribute_prizes/<int:contest_id>', methods=['POST'])
 @token_required
 def distribute_prizes(current_user_email, contest_id):
-    # Check admin rights
     if not is_admin_user(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     try:
-        cursor = db.cursor(dictionary=True)
+        with mysql_cursor(dictionary=True) as cursor:
+            cursor.execute("SELECT prize_pool, status, commission_percentage FROM contests WHERE id = %s", (contest_id,))
+            contest = cursor.fetchone()
 
-        # 1. Get contest and check status
-        cursor.execute("SELECT prize_pool, status, commission_percentage FROM contests WHERE id = %s", (contest_id,))
-        contest = cursor.fetchone()
+            if not contest:
+                return jsonify({"message": "Contest not found"}), 404
+            if contest['status'] == 'prizes_distributed':
+                return jsonify({"message": "Prizes already distributed"}), 400
 
-        if not contest:
-            return jsonify({"message": "Contest not found"}), 404
-        if contest['status'] == 'prizes_distributed':
-            return jsonify({"message": "Prizes already distributed"}), 400
+            prize_pool = float(contest['prize_pool'])
+            commission_percentage = contest['commission_percentage'] or 0
+            commission_amount = prize_pool * (commission_percentage / 100)
+            prize_pool -= commission_amount
 
-        prize_pool = float(contest['prize_pool'])
-        commission_percentage = contest['commission_percentage'] or 0
-        commission_amount = prize_pool * (commission_percentage / 100)
-        prize_pool -= commission_amount  # reduce commission from prize pool
-
-        # 2. Insert platform earnings
-        cursor.execute("""
-            INSERT INTO platform_earnings (contest_id, commission_amount)
-            VALUES (%s, %s)
-        """, (contest_id, commission_amount))
-
-        # 3. Get prize distribution
-        cursor.execute("""
-            SELECT rank_position, percentage
-            FROM prize_distributions
-            WHERE contest_id = %s
-            ORDER BY rank_position ASC
-        """, (contest_id,))
-        distributions = cursor.fetchall()
-
-        if not distributions:
-            return jsonify({"message": "No prize distribution set for this contest"}), 400
-
-        # 4. Get teams sorted by score
-        cursor.execute("""
-            SELECT t.id as team_id, t.user_id, t.total_points
-            FROM teams t
-            WHERE t.contest_id = %s
-            ORDER BY t.total_points DESC
-            LIMIT %s
-        """, (contest_id, len(distributions)))
-        teams = cursor.fetchall()
-
-        if not teams:
-            return jsonify({"message": "No teams found for this contest"}), 400
-
-        # 5. Distribute prizes
-        for idx, team in enumerate(teams):
-            rank = idx + 1
-            prize_percentage = float(next((d['percentage'] for d in distributions if d['rank_position'] == rank), 0))
-            prize_amount = prize_pool * (prize_percentage / 100)
-
-            cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (team['user_id'],))
-            wallet = cursor.fetchone()
-            if wallet is None:
-                return jsonify({"message": f"Wallet not found for user_id {team['user_id']}"}), 404
-
-            new_balance = Decimal(str(wallet['balance'])) + Decimal(str(prize_amount))
-            cursor.execute("UPDATE wallets SET balance = %s WHERE user_id = %s", (new_balance, team['user_id']))
-
-            # Add transaction record
             cursor.execute("""
-                INSERT INTO transaction_history (user_id, amount, transaction_type, description)
-                VALUES (%s, %s, 'credit', %s)
-            """, (team['user_id'], prize_amount, f'Prize for rank {rank} in contest {contest_id}'))
-
-            # Add notification
-            cursor.execute("""
-                INSERT INTO notifications (user_id, message)
+                INSERT INTO platform_earnings (contest_id, commission_amount)
                 VALUES (%s, %s)
-            """, (team['user_id'], f"🎉 You won ₹{prize_amount:.2f} in contest ID {contest_id} (Rank {rank})!"))
+            """, (contest_id, commission_amount))
 
-        # 6. Update contest status
-        cursor.execute("UPDATE contests SET status = 'prizes_distributed' WHERE id = %s", (contest_id,))
+            cursor.execute("""
+                SELECT rank_position, percentage
+                FROM prize_distributions
+                WHERE contest_id = %s
+                ORDER BY rank_position ASC
+            """, (contest_id,))
+            distributions = cursor.fetchall()
+
+            if not distributions:
+                return jsonify({"message": "No prize distribution set for this contest"}), 400
+
+            cursor.execute("""
+                SELECT t.id as team_id, t.user_id, t.total_points
+                FROM teams t
+                WHERE t.contest_id = %s
+                ORDER BY t.total_points DESC
+                LIMIT %s
+            """, (contest_id, len(distributions)))
+            teams = cursor.fetchall()
+
+            if not teams:
+                return jsonify({"message": "No teams found for this contest"}), 400
+
+            for idx, team in enumerate(teams):
+                rank = idx + 1
+                prize_percentage = float(next((d['percentage'] for d in distributions if d['rank_position'] == rank), 0))
+                prize_amount = prize_pool * (prize_percentage / 100)
+
+                cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (team['user_id'],))
+                wallet = cursor.fetchone()
+                if wallet is None:
+                    return jsonify({"message": f"Wallet not found for user_id {team['user_id']}"}), 404
+
+                new_balance = Decimal(str(wallet['balance'])) + Decimal(str(prize_amount))
+                cursor.execute("UPDATE wallets SET balance = %s WHERE user_id = %s", (new_balance, team['user_id']))
+
+                cursor.execute("""
+                    INSERT INTO transaction_history (user_id, amount, transaction_type, description)
+                    VALUES (%s, %s, 'credit', %s)
+                """, (team['user_id'], prize_amount, f'Prize for rank {rank} in contest {contest_id}'))
+
+                cursor.execute("""
+                    INSERT INTO notifications (user_id, message)
+                    VALUES (%s, %s)
+                """, (team['user_id'], f"🎉 You won ₹{prize_amount:.2f} in contest ID {contest_id} (Rank {rank})!"))
+
+            cursor.execute("UPDATE contests SET status = 'prizes_distributed' WHERE id = %s", (contest_id,))
         db.commit()
 
         return jsonify({
@@ -931,542 +1176,6 @@ def distribute_prizes(current_user_email, contest_id):
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
-
-
-
-
-
-
-# Example: Admin-only route to view all withdrawal requests
-@app.route('/admin/withdrawal_requests', methods=['GET'])
-@token_required
-def view_all_withdrawal_requests(current_user_email):
-    if not is_admin_user(current_user_email):
-        return jsonify({"message": "Unauthorized access"}), 403  # Forbidden
-
-    try:
-        cursor = db.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT wr.id, u.username, u.email, wr.amount, wr.status, 
-                   wr.requested_at, wr.processed_at, wr.admin_remark
-            FROM withdrawal_requests wr
-            JOIN users u ON wr.user_id = u.id
-            ORDER BY wr.requested_at DESC
-        """)
-        results = cursor.fetchall()
-
-        return jsonify(results)
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
-
-
-
-
-
-
-
-# Example: Admin-only route to process (approve/reject) withdrawal requests
-@app.route('/admin/process_withdrawal/<int:request_id>', methods=['POST'])
-@token_required
-def process_withdrawal(current_user_email, request_id):
-    if not is_admin_user(current_user_email):
-        return jsonify({"message": "Unauthorized access"}), 403
-
-    data = request.get_json()
-    action = data.get('action')  # 'approve' or 'reject'
-    admin_remark = data.get('remark', '')
-
-    if action not in ['approve', 'reject']:
-        return jsonify({"message": "Invalid action"}), 400
-
-    try:
-        cursor = db.cursor()
-
-        # Get withdrawal request details
-        cursor.execute("SELECT user_id, amount, status FROM withdrawal_requests WHERE id = %s", (request_id,))
-        request_row = cursor.fetchone()
-
-        if not request_row:
-            return jsonify({"message": "Withdrawal request not found"}), 404
-
-        user_id, amount, status = request_row
-        if status != 'pending':
-            return jsonify({"message": "Withdrawal request already processed"}), 400
-
-        if action == 'approve':
-            # Check wallet balance
-            cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (user_id,))
-            wallet = cursor.fetchone()
-            if not wallet or wallet[0] < amount:
-                return jsonify({"message": "Insufficient wallet balance"}), 400
-
-            new_balance = wallet[0] - amount
-            cursor.execute("UPDATE wallets SET balance = %s WHERE user_id = %s", (new_balance, user_id))
-
-            # Update withdrawal request status
-            cursor.execute("""
-                UPDATE withdrawal_requests 
-                SET status = 'approved', processed_at = NOW(), admin_remark = %s 
-                WHERE id = %s
-            """, (admin_remark, request_id))
-
-            # Add transaction record (optional, if you have transaction_history table)
-            cursor.execute("""
-                INSERT INTO transaction_history (user_id, amount, transaction_type, description)
-                VALUES (%s, %s, %s, %s)
-            """, (user_id, amount, 'debit', 'Withdrawal approved by admin'))
-
-        else:  # reject
-            cursor.execute("""
-                UPDATE withdrawal_requests 
-                SET status = 'rejected', processed_at = NOW(), admin_remark = %s
-                WHERE id = %s
-            """, (admin_remark, request_id))
-
-        db.commit()
-        return jsonify({"message": f"Withdrawal request {action}d successfully!"})
-
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
-
-@app.route('/admin/withdrawal_request/<int:request_id>', methods=['POST'])
-@token_required  # You can add admin role check inside the decorator or here
-def admin_process_withdrawal(current_user_email, request_id):
-    data = request.get_json()
-    action = data.get('action')  # "approve" or "reject"
-
-    if action not in ['approve', 'reject']:
-        return jsonify({"message": "Invalid action"}), 400
-
-    try:
-        cursor = db.cursor(dictionary=True)
-
-        # Get withdrawal request details
-        cursor.execute("SELECT * FROM withdrawal_requests WHERE id = %s AND status = 'pending'", (request_id,))
-        request_info = cursor.fetchone()
-        if not request_info:
-            return jsonify({"message": "Withdrawal request not found or already processed"}), 404
-
-        user_id = request_info['user_id']
-        amount = request_info['amount']
-
-        if action == 'approve':
-            # Check wallet balance
-            cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (user_id,))
-            wallet = cursor.fetchone()
-            if not wallet or wallet['balance'] < amount:
-                return jsonify({"message": "Insufficient wallet balance"}), 400
-            
-            # Deduct amount
-            new_balance = wallet['balance'] - amount
-            cursor.execute("UPDATE wallets SET balance = %s WHERE user_id = %s", (new_balance, user_id))
-            
-            # Update withdrawal request status
-            cursor.execute("UPDATE withdrawal_requests SET status = 'approved' WHERE id = %s", (request_id,))
-            
-            # Add transaction history
-            cursor.execute("""
-                INSERT INTO transaction_history (user_id, amount, transaction_type, description)
-                VALUES (%s, %s, %s, %s)
-            """, (user_id, amount, 'debit', 'Withdrawal approved by admin'))
-
-        else:  # reject
-            cursor.execute("UPDATE withdrawal_requests SET status = 'rejected' WHERE id = %s", (request_id,))
-
-        db.commit()
-        return jsonify({"message": f"Withdrawal request {action}d successfully"})
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
-
-
-
-
-
-
-
-
-
-@app.route('/request_withdrawal', methods=['POST'])
-@token_required
-def request_withdrawal(current_user_email):
-    data = request.get_json()
-    amount = data.get('amount')
-
-    if not amount:
-        return jsonify({"message": "Amount is required"}), 400
-
-    try:
-        cursor = db.cursor()
-
-        # Get user ID from email
-        cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-        user = cursor.fetchone()
-        if not user:
-            return jsonify({"message": "User not found"}), 404
-        user_id = user[0]
-
-        # Insert withdrawal request
-        cursor.execute("""
-            INSERT INTO withdrawal_requests (user_id, amount)
-            VALUES (%s, %s)
-        """, (user_id, amount))
-
-        db.commit()
-        return jsonify({"message": "Withdrawal request successfully registered!"})
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
-
-
-
-# CREATE CONTEST
-@app.route('/admin/create_contest', methods=['POST'])
-@token_required
-def admin_create_contest(current_user_email):
-    if not is_admin_user(current_user_email):
-        return jsonify({"message": "Unauthorized"}), 403
-
-    data = request.get_json()
-    contest_name = data.get('contest_name')
-    match_id = data.get('match_id')
-    entry_fee = data.get('entry_fee')
-    max_users = data.get('max_users')
-    commission_percentage = data.get('commission_percentage', 15)
-    max_teams_per_user = data.get('max_teams_per_user', 1)
-
-    if not all([contest_name, match_id, entry_fee, max_users]):
-        return jsonify({"message": "Missing required fields"}), 400
-
-    try:
-        entry_fee = float(entry_fee)
-        max_users = int(max_users)
-        commission_percentage = float(commission_percentage)
-
-        total_collection = entry_fee * max_users
-        commission = total_collection * (commission_percentage / 100)
-        prize_pool = total_collection - commission
-
-        cursor = db.cursor()
-        cursor.execute("""
-            INSERT INTO contests (
-                contest_name, match_id, entry_fee, prize_pool,
-                start_time, end_time, status, max_teams_per_user,
-                commission_percentage, max_users
-            )
-            VALUES (%s, %s, %s, %s, NOW(), NOW(), 'active', %s, %s, %s)
-        """, (contest_name, match_id, entry_fee, prize_pool,
-              max_teams_per_user, commission_percentage, max_users))
-
-        db.commit()
-        return jsonify({"message": "Contest created successfully!"})
-    except Exception as err:
-        print("❌ Create contest error:", err)
-        return jsonify({"error": str(err)}), 500
-
-@app.route('/my_teams', methods=['GET'])
-@token_required
-def get_my_teams(current_user_email):
-    try:
-        cursor = db.cursor(dictionary=True)
-
-        # Get user id from email
-        cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-        user = cursor.fetchone()
-        if not user:
-            return jsonify({"message": "User not found"}), 404
-        
-        user_id = user['id']
-
-        # Get all teams for this user with contest info
-        cursor.execute("""
-            SELECT t.id as team_id, t.team_name, t.players, t.total_points, c.id as contest_id, c.contest_name, c.status
-            FROM teams t
-            LEFT JOIN contests c ON t.contest_id = c.id
-            WHERE t.user_id = %s
-        """, (user_id,))
-
-        teams = cursor.fetchall()
-
-        # Format players JSON string back to list for better API response
-        for team in teams:
-            team['players'] = json.loads(team['players'])
-
-        return jsonify({"teams": teams})
-    
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
-
-
-@app.route('/my_contests', methods=['GET'])
-@token_required
-def get_my_contests(current_user_email):
-    try:
-        cursor = db.cursor(dictionary=True)
-
-        # Get user id
-        cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-        user = cursor.fetchone()
-        if not user:
-            return jsonify({"message": "User not found"}), 404
-        
-        user_id = user['id']
-
-        # Get contest ids where user has teams
-        cursor.execute("""
-            SELECT DISTINCT c.id, c.contest_name, c.entry_fee, c.prize_pool, c.status, c.start_time, c.end_time
-            FROM contests c
-            JOIN teams t ON c.id = t.contest_id
-            WHERE t.user_id = %s
-        """, (user_id,))
-
-        contests = cursor.fetchall()
-
-        return jsonify({"contests": contests})
-
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
-
-# ----------  MATCH → CONTEST LIST  ----------
-@app.route('/contests/<int:match_id>', methods=['GET'])
-def get_contests(match_id):
-    """
-    Return ALL contests that belong to the given match_id
-    Ordered by prize_pool DESC so biggest prizes first.
-    """
-    try:
-        cursor = db.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT id,
-                   name,
-                   entry_fee,
-                   prize_pool,
-                   max_users,
-                   joined_users,
-                   start_time,
-                   end_time
-            FROM contests
-            WHERE match_id = %s
-            ORDER BY prize_pool DESC
-        """, (match_id,))
-        return jsonify(cursor.fetchall())
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-    
-
-
-
-# 3️⃣  Contest details / leaderboard -------
-@app.route('/contests/<int:contest_id>/details', methods=['GET'])
-@token_required
-def contest_details(current_user_email, contest_id):
-    """
-    Returns:  { contest: {...}, teams: [ {...rank…} ] }
-    """
-    try:
-        cursor = db.cursor(dictionary=True)
-
-        # contest info
-        cursor.execute("""
-            SELECT id, name, entry_fee, prize_pool, status,
-                   start_time, end_time
-            FROM contests
-            WHERE id = %s
-        """, (contest_id,))
-        contest = cursor.fetchone()
-        if not contest:
-            return jsonify({"message": "Contest not found"}), 404
-
-        # leaderboard
-        cursor.execute("""
-            SELECT t.id   AS team_id,
-                   t.team_name,
-                   t.total_points,
-                   u.username
-            FROM teams t
-                 JOIN users u ON t.user_id = u.id
-            WHERE t.contest_id = %s
-            ORDER BY t.total_points DESC
-        """, (contest_id,))
-        teams = cursor.fetchall()
-
-        # add rank field
-        for idx, team in enumerate(teams, start=1):
-            team['rank'] = idx
-
-        return jsonify({"contest": contest, "teams": teams})
-
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
-
-
-
-@app.route('/edit_team', methods=['POST'])
-@token_required
-def edit_team(current_user_email):
-    data = request.get_json()
-    team_id = data.get('team_id')
-    new_team_name = data.get('team_name')
-    new_players = data.get('players')
-
-    if not team_id or not new_team_name or not new_players:
-        return jsonify({"message": "Missing team_id, team_name, or players"}), 400
-
-    try:
-        cursor = db.cursor(dictionary=True)
-
-        # Get user_id of current user
-        cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-        user = cursor.fetchone()
-        if not user:
-            return jsonify({"message": "User not found"}), 404
-        user_id = user['id']
-
-        # Check if team belongs to current user
-        cursor.execute("SELECT contest_id FROM teams WHERE id = %s AND user_id = %s", (team_id, user_id))
-        team = cursor.fetchone()
-        if not team:
-            return jsonify({"message": "Team not found or does not belong to user"}), 404
-
-        contest_id = team['contest_id']
-
-        # Check if contest has not started yet
-        cursor.execute("SELECT start_time FROM contests WHERE id = %s", (contest_id,))
-        contest = cursor.fetchone()
-        if not contest:
-            return jsonify({"message": "Contest not found"}), 404
-
-        from datetime import datetime
-        now = datetime.utcnow()
-        contest_start = contest['start_time']
-
-        if contest_start <= now:
-            return jsonify({"message": "Cannot edit team after contest has started"}), 400
-
-        # Update team details
-        players_json = json.dumps(new_players)
-        cursor.execute("""
-            UPDATE teams 
-            SET team_name = %s, players = %s 
-            WHERE id = %s
-        """, (new_team_name, players_json, team_id))
-
-        db.commit()
-        return jsonify({"message": "Team updated successfully"})
-
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
-
-
-
-
-
-
-
-# Match status updater function (outside the route)
-def update_match_statuses():
-    now = datetime.utcnow()  # ✅ Fix: no need for datetime.datetime
-    cursor = db.cursor()
-    cursor.execute("UPDATE matches SET status = 'live' WHERE start_time <= %s AND end_time > %s", (now, now))
-    cursor.execute("UPDATE matches SET status = 'completed' WHERE end_time <= %s", (now,))
-    cursor.execute("UPDATE matches SET status = 'upcoming' WHERE start_time > %s", (now,))
-    db.commit()
-
-
-
-
-
-# Flask route to trigger match status update
-@app.route('/admin/update_match_statuses', methods=['GET'])
-@token_required
-def call_update_status(current_user_email):
-    if not is_admin_user(current_user_email):
-        return jsonify({"message": "Unauthorized"}), 403
-
-    update_match_statuses()
-    return jsonify({"message": "Match statuses updated!"})
-
-
-# 1. List all matches
-@app.route('/matches', methods=['GET'])
-def get_matches():
-    try:
-        cur = db.cursor(dictionary=True)
-        cur.execute("""
-          SELECT
-            id,
-            match_name   AS name,
-            start_time,
-            UPPER(status) AS status
-          FROM matches
-          ORDER BY start_time
-        """)
-        matches = cur.fetchall()
-        return jsonify(matches), 200
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
-
-@app.route('/admin/auto_lock_contests', methods=['POST'])
-@token_required
-def auto_lock_contests(current_user_email):
-    # Check if admin
-    if not is_admin_user(current_user_email):
-        return jsonify({"message": "Unauthorized"}), 403
-
-    try:
-        cursor = db.cursor()
-        now = datetime.utcnow()
-
-        # Update contests where match has started but contest not locked yet
-        cursor.execute("""
-            UPDATE contests c
-            JOIN matches m ON c.match_id = m.id
-            SET c.status = 'locked'
-            WHERE m.start_time <= %s AND c.status = 'upcoming'
-        """, (now,))
-
-        db.commit()
-        return jsonify({"message": "Auto-lock contests updated based on match start time."})
-
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
-
-
-
-@app.route('/notifications', methods=['GET'])
-@token_required
-def get_notifications(current_user_email):
-    try:
-        cursor = db.cursor(dictionary=True)
-        
-        # Get user id from email
-        cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-        user = cursor.fetchone()
-        if not user:
-            return jsonify({"message": "User not found"}), 404
-
-        user_id = user['id']
-
-        # Fetch notifications for user
-        cursor.execute(
-            "SELECT message, created_at FROM notifications WHERE user_id = %s ORDER BY created_at DESC", 
-            (user_id,)
-        )
-        notifications = cursor.fetchall()
-
-        # Return notifications wrapped in an object, not raw list (better API design)
-        return jsonify({"notifications": notifications})
-
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
 
 
 
@@ -1484,31 +1193,33 @@ def wallet_topup(current_user_email):
     if amount <= 0:
         return jsonify({"message": "Invalid amount"}), 400
 
-    cursor = db.cursor()
-    cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-    user = cursor.fetchone()
-    if not user:
-        return jsonify({"message": "User not found"}), 404
-    user_id = user[0]
+    try:
+        with mysql_cursor(dictionary=False) as cursor:
+            cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+            user = cursor.fetchone()
+            if not user:
+                return jsonify({"message": "User not found"}), 404
+            user_id = user[0]
 
-    # Update wallet balance
-    cursor.execute("UPDATE wallets SET balance = balance + %s WHERE user_id = %s", (amount, user_id))
+            # Update wallet balance
+            cursor.execute("UPDATE wallets SET balance = balance + %s WHERE user_id = %s", (amount, user_id))
 
-    # Log transaction
-    cursor.execute("""
-        INSERT INTO transactions (user_id, amount, type, description)
-        VALUES (%s, %s, 'credit', 'Wallet top-up')
-    """, (user_id, amount))
+            # Log transaction
+            cursor.execute("""
+                INSERT INTO transactions (user_id, amount, type, description)
+                VALUES (%s, %s, 'credit', 'Wallet top-up')
+            """, (user_id, amount))
 
-    # Optional notification
-    cursor.execute("""
-        INSERT INTO notifications (user_id, message)
-        VALUES (%s, %s)
-    """, (user_id, f"₹{amount:.2f} added to your wallet successfully."))
+            # Optional notification
+            cursor.execute("""
+                INSERT INTO notifications (user_id, message)
+                VALUES (%s, %s)
+            """, (user_id, f"₹{amount:.2f} added to your wallet successfully."))
 
-    db.commit()
-    return jsonify({"message": f"Wallet topped up with ₹{amount} successfully."})
+        return jsonify({"message": f"Wallet topped up with ₹{amount} successfully."})
 
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
 
 
 @app.route('/admin/statistics', methods=['GET', 'OPTIONS'])
@@ -1518,37 +1229,36 @@ def admin_statistics(current_user_email):
     if request.method == 'OPTIONS':
         return make_response('', 204)
 
-    # 2) Only admins
+    # 2) Only admins allowed
     if not is_admin_user(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     try:
-        cursor = db.cursor()
+        with mysql_cursor() as cursor:
+            # Total users
+            cursor.execute("SELECT COUNT(*) FROM users")
+            total_users = cursor.fetchone()[0] or 0
 
-        # Total users
-        cursor.execute("SELECT COUNT(*) FROM users")
-        total_users = cursor.fetchone()[0] or 0
+            # Total matches
+            cursor.execute("SELECT COUNT(*) FROM matches")
+            total_matches = cursor.fetchone()[0] or 0
 
-        # Total matches
-        cursor.execute("SELECT COUNT(*) FROM matches")
-        total_matches = cursor.fetchone()[0] or 0
+            # Total contests & active contests
+            cursor.execute("SELECT COUNT(*), SUM(status='active') FROM contests")
+            total_contests, active_contests = cursor.fetchone()
+            total_contests  = total_contests or 0
+            active_contests = active_contests or 0
 
-        # Total contests & active contests
-        cursor.execute("SELECT COUNT(*), SUM(status='active') FROM contests")
-        total_contests, active_contests = cursor.fetchone()
-        total_contests  = total_contests or 0
-        active_contests = active_contests or 0
+            # Prize distributed
+            cursor.execute("SELECT COALESCE(SUM(prize_pool), 0) FROM contests")
+            total_prize_distributed = float(cursor.fetchone()[0])
 
-        # Prize distributed = sum of prize_pool
-        cursor.execute("SELECT COALESCE(SUM(prize_pool),0) FROM contests")
-        total_prize_distributed = float(cursor.fetchone()[0])
-
-        # Commission earned = SUM(entry_fee * joined_users * commission_percentage/100)
-        cursor.execute("""
-            SELECT COALESCE(SUM(entry_fee * joined_users * commission_percentage/100),0)
-            FROM contests
-        """)
-        total_commission_earned = float(cursor.fetchone()[0])
+            # Commission earned
+            cursor.execute("""
+                SELECT COALESCE(SUM(entry_fee * joined_users * commission_percentage / 100), 0)
+                FROM contests
+            """)
+            total_commission_earned = float(cursor.fetchone()[0])
 
         return jsonify({
             "total_users":               total_users,
@@ -1563,6 +1273,8 @@ def admin_statistics(current_user_email):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+
+
 @app.route('/admin/commission_report', methods=['GET'])
 @token_required
 def commission_report(current_user_email):
@@ -1570,24 +1282,24 @@ def commission_report(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     try:
-        cursor = db.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT 
-                c.id AS contest_id,
-                c.name AS contest_name,
-                c.entry_fee,
-                c.commission_percentage,
-                COUNT(e.id) AS total_entries,
-                ROUND(COUNT(e.id) * c.entry_fee * (c.commission_percentage / 100), 2) AS commission_earned
-            FROM contests c
-            JOIN entries e ON c.id = e.contest_id
-            GROUP BY c.id, c.name, c.entry_fee, c.commission_percentage
-        """)
-        data = cursor.fetchall()
+        with mysql_cursor(dictionary=True) as cursor:
+            cursor.execute("""
+                SELECT 
+                    c.id AS contest_id,
+                    c.name AS contest_name,
+                    c.entry_fee,
+                    c.commission_percentage,
+                    COUNT(e.id) AS total_entries,
+                    ROUND(COUNT(e.id) * c.entry_fee * (c.commission_percentage / 100), 2) AS commission_earned
+                FROM contests c
+                JOIN entries e ON c.id = e.contest_id
+                GROUP BY c.id, c.name, c.entry_fee, c.commission_percentage
+            """)
+            data = cursor.fetchall()
         return jsonify(data)
+
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
-
 
 
 @app.route('/admin/platform_stats', methods=['GET'])
@@ -1598,51 +1310,50 @@ def admin_platform_stats(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     try:
-        cursor = db.cursor(dictionary=True)
+        with mysql_cursor(dictionary=True) as cursor:
+            # 🔹 Total registered users
+            cursor.execute("SELECT COUNT(*) AS total_users FROM users")
+            total_users = cursor.fetchone()['total_users']
 
-        # 🔹 Total registered users
-        cursor.execute("SELECT COUNT(*) AS total_users FROM users")
-        total_users = cursor.fetchone()['total_users']
+            # 🔹 Total contests
+            cursor.execute("SELECT COUNT(*) AS total_contests FROM contests")
+            total_contests = cursor.fetchone()['total_contests']
 
-        # 🔹 Total contests
-        cursor.execute("SELECT COUNT(*) AS total_contests FROM contests")
-        total_contests = cursor.fetchone()['total_contests']
+            # 🔹 Total prize pool distributed (only from completed contests)
+            cursor.execute("""
+                SELECT IFNULL(SUM(prize_pool), 0) AS total_prize_distributed
+                FROM contests
+                WHERE status = 'prizes_distributed'
+            """)
+            total_prize_distributed = float(cursor.fetchone()['total_prize_distributed'])
 
-        # 🔹 Total prize pool distributed (only from completed contests)
-        cursor.execute("""
-            SELECT IFNULL(SUM(prize_pool), 0) AS total_prize_distributed
-            FROM contests
-            WHERE status = 'prizes_distributed'
-        """)
-        total_prize_distributed = float(cursor.fetchone()['total_prize_distributed'])
+            # 🔹 Total commission earned
+            cursor.execute("""
+                SELECT IFNULL(SUM(prize_pool * commission_percentage / 100), 0) AS total_commission
+                FROM contests
+                WHERE status = 'prizes_distributed'
+            """)
+            total_commission = float(cursor.fetchone()['total_commission'])
 
-        # 🔹 Total commission earned
-        cursor.execute("""
-            SELECT IFNULL(SUM(prize_pool * commission_percentage / 100), 0) AS total_commission
-            FROM contests
-            WHERE status = 'prizes_distributed'
-        """)
-        total_commission = float(cursor.fetchone()['total_commission'])
+            # 🔹 Total wallet top-ups
+            cursor.execute("""
+                SELECT IFNULL(SUM(amount), 0) AS total_topups
+                FROM transactions
+                WHERE type = 'credit' AND description LIKE '%Top-up%'
+            """)
+            total_topups = float(cursor.fetchone()['total_topups'])
 
-        # 🔹 Total wallet top-ups
-        cursor.execute("""
-            SELECT IFNULL(SUM(amount), 0) AS total_topups
-            FROM transactions
-            WHERE type = 'credit' AND description LIKE '%Top-up%'
-        """)
-        total_topups = float(cursor.fetchone()['total_topups'])
+            # 🔹 Total withdrawal requests
+            cursor.execute("SELECT COUNT(*) AS total_withdrawals FROM withdrawals")
+            total_withdrawals = cursor.fetchone()['total_withdrawals']
 
-        # 🔹 Total withdrawal requests
-        cursor.execute("SELECT COUNT(*) AS total_withdrawals FROM withdrawals")
-        total_withdrawals = cursor.fetchone()['total_withdrawals']
-
-        # 🔹 Total withdrawals approved
-        cursor.execute("""
-            SELECT IFNULL(SUM(amount), 0) AS approved_withdrawals
-            FROM withdrawals
-            WHERE status = 'approved'
-        """)
-        approved_withdrawals = float(cursor.fetchone()['approved_withdrawals'])
+            # 🔹 Total withdrawals approved
+            cursor.execute("""
+                SELECT IFNULL(SUM(amount), 0) AS approved_withdrawals
+                FROM withdrawals
+                WHERE status = 'approved'
+            """)
+            approved_withdrawals = float(cursor.fetchone()['approved_withdrawals'])
 
         return jsonify({
             "total_users": total_users,
@@ -1664,41 +1375,40 @@ def admin_platform_stats(current_user_email):
 @token_required
 def my_contest_history(current_user_email):
     try:
-        cursor = db.cursor(dictionary=True)
+        with mysql_cursor(dictionary=True) as cursor:
+            # Get user ID
+            cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+            user = cursor.fetchone()
+            if not user:
+                return jsonify({"message": "User not found"}), 404
+            user_id = user['id']
 
-        # Get user ID
-        cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-        user = cursor.fetchone()
-        if not user:
-            return jsonify({"message": "User not found"}), 404
-        user_id = user['id']
-
-        # Get contests joined by user along with stats
-        cursor.execute("""
-            SELECT 
-                c.id AS contest_id,
-                c.name AS contest_name,
-                c.entry_fee,
-                c.prize_pool,
-                c.status AS contest_status,
-                m.match_name,
-                m.start_time,
-                t.id AS team_id,
-                t.total_points,
-                th.amount AS winning_amount,
-                th.description
-            FROM entries e
-            JOIN contests c ON e.contest_id = c.id
-            JOIN teams t ON e.team_id = t.id
-            JOIN matches m ON c.match_id = m.id
-            LEFT JOIN transaction_history th 
-                ON th.user_id = e.user_id 
-                AND th.description LIKE CONCAT('%contest ', c.id)
-                AND th.transaction_type = 'credit'
-            WHERE e.user_id = %s
-            ORDER BY c.start_time DESC
-        """, (user_id,))
-        history = cursor.fetchall()
+            # Get contests joined by user along with stats
+            cursor.execute("""
+                SELECT 
+                    c.id AS contest_id,
+                    c.name AS contest_name,
+                    c.entry_fee,
+                    c.prize_pool,
+                    c.status AS contest_status,
+                    m.match_name,
+                    m.start_time,
+                    t.id AS team_id,
+                    t.total_points,
+                    th.amount AS winning_amount,
+                    th.description
+                FROM entries e
+                JOIN contests c ON e.contest_id = c.id
+                JOIN teams t ON e.team_id = t.id
+                JOIN matches m ON c.match_id = m.id
+                LEFT JOIN transaction_history th 
+                    ON th.user_id = e.user_id 
+                    AND th.description LIKE CONCAT('%contest ', c.id)
+                    AND th.transaction_type = 'credit'
+                WHERE e.user_id = %s
+                ORDER BY c.start_time DESC
+            """, (user_id,))
+            history = cursor.fetchall()
 
         return jsonify({"history": history})
 
@@ -1710,29 +1420,27 @@ def my_contest_history(current_user_email):
 @token_required
 def get_contest_result(current_user_email, contest_id):
     try:
-        cursor = db.cursor(dictionary=True)
-
-        # Get contest entries with user, team, and points
-        query = """
-            SELECT u.name as user_name, t.team_name, t.total_points
-            FROM entries e
-            JOIN users u ON e.user_id = u.id
-            JOIN teams t ON e.team_id = t.id
-            WHERE e.contest_id = %s
-            ORDER BY t.total_points DESC
-        """
-        cursor.execute(query, (contest_id,))
-        results = cursor.fetchall()
+        with mysql_cursor(dictionary=True) as cursor:
+            # Get contest entries with user, team, and points
+            query = """
+                SELECT u.name as user_name, t.team_name, t.total_points
+                FROM entries e
+                JOIN users u ON e.user_id = u.id
+                JOIN teams t ON e.team_id = t.id
+                WHERE e.contest_id = %s
+                ORDER BY t.total_points DESC
+            """
+            cursor.execute(query, (contest_id,))
+            results = cursor.fetchall()
 
         # Add ranks
         for i, row in enumerate(results, start=1):
             row['rank'] = i
 
         return jsonify({"results": results}), 200
+
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
-
-
 
 @app.route('/admin/dashboard', methods=['GET'])
 @token_required
@@ -1741,28 +1449,28 @@ def admin_dashboard(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     try:
-        cursor = db.cursor(dictionary=True)
+        with mysql_cursor(dictionary=True) as cursor:
 
-        # Users, Matches, Contests
-        cursor.execute("SELECT COUNT(*) AS count FROM users")
-        total_users = cursor.fetchone()['count']
+            # Users, Matches, Contests
+            cursor.execute("SELECT COUNT(*) AS count FROM users")
+            total_users = cursor.fetchone()['count']
 
-        cursor.execute("SELECT COUNT(*) AS count FROM matches")
-        total_matches = cursor.fetchone()['count']
+            cursor.execute("SELECT COUNT(*) AS count FROM matches")
+            total_matches = cursor.fetchone()['count']
 
-        cursor.execute("SELECT COUNT(*) AS count FROM contests")
-        total_contests = cursor.fetchone()['count']
+            cursor.execute("SELECT COUNT(*) AS count FROM contests")
+            total_contests = cursor.fetchone()['count']
 
-        cursor.execute("SELECT COUNT(*) AS count FROM contests WHERE status = 'active'")
-        active_contests = cursor.fetchone()['count']
+            cursor.execute("SELECT COUNT(*) AS count FROM contests WHERE status = 'active'")
+            active_contests = cursor.fetchone()['count']
 
-        # Total prize distributed (sum of all winning amounts)
-        cursor.execute("SELECT SUM(prize) AS total FROM entries WHERE prize IS NOT NULL")
-        prize_total = cursor.fetchone()['total'] or 0
+            # Total prize distributed (sum of all winning amounts)
+            cursor.execute("SELECT SUM(prize) AS total FROM entries WHERE prize IS NOT NULL")
+            prize_total = cursor.fetchone()['total'] or 0
 
-        # Platform earnings from commissions
-        cursor.execute("SELECT SUM(commission_amount) AS total FROM platform_earnings")
-        commission_total = cursor.fetchone()['total'] or 0
+            # Platform earnings from commissions
+            cursor.execute("SELECT SUM(commission_amount) AS total FROM platform_earnings")
+            commission_total = cursor.fetchone()['total'] or 0
 
         return jsonify({
             "total_users": total_users,
@@ -1784,13 +1492,12 @@ def admin_get_matches(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     try:
-        cursor = db.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM matches ORDER BY start_time DESC")
-        return jsonify(cursor.fetchall()), 200
+        with mysql_cursor(dictionary=True) as cursor:
+            cursor.execute("SELECT * FROM matches ORDER BY start_time DESC")
+            return jsonify(cursor.fetchall()), 200
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
 
 
 
@@ -1811,68 +1518,68 @@ def admin_create_match(current_user_email):
         end_time = data['end_time']
         status = data.get('status', 'UPCOMING')
 
-        cur = db.cursor(dictionary=True)
+        with mysql_cursor(dictionary=True) as cur:
 
-        # Step 1: Insert match
-        cur.execute("""
-            INSERT INTO matches (match_name, start_time, end_time, status)
-            VALUES (%s, %s, %s, %s)
-        """, (match_name, start_time, end_time, status))
-        match_id = cur.lastrowid
-
-        # Step 2: Parse teams
-        sides = [s.strip().lower().replace(" ", "").replace("_", "") for s in re.split(r'vs|VS|Vs|vS', match_name) if s.strip()]
-        if len(sides) != 2:
-            return jsonify({"message": "❌ Could not parse 2 teams from match_name"}), 400
-
-        team_map = {
-            "ind": "India", "india": "India",
-            "pak": "Pakistan", "pakistan": "Pakistan",
-            "aus": "Australia", "australia": "Australia",
-            "eng": "England", "england": "England",
-            "sa": "South Africa", "southafrica": "South Africa", "south_africa": "South Africa",
-            "nz": "New Zealand", "newzealand": "New Zealand", "new_zealand": "New Zealand",
-            "sl": "Sri Lanka", "srilanka": "Sri Lanka", "sri_lanka": "Sri Lanka",
-            "ban": "Bangladesh", "bangladesh": "Bangladesh",
-            "afg": "Afghanistan", "afghanistan": "Afghanistan",
-            "wi": "West Indies", "westindies": "West Indies", "west_indies": "West Indies",
-            "zim": "Zimbabwe", "zimbabwe": "Zimbabwe",
-            "nam": "Namibia", "namibia": "Namibia",
-            "uae": "UAE", "nepal": "Nepal",
-            "ire": "Ireland", "ireland": "Ireland",
-            "sco": "Scotland", "scotland": "Scotland",
-            "ned": "Netherlands", "netherlands": "Netherlands"
-        }
-
-        team1 = team_map.get(sides[0])
-        team2 = team_map.get(sides[1])
-        if not team1 or not team2:
-            return jsonify({"message": f"❌ Unknown team(s) in match_name: {match_name}"}), 400
-
-        # Step 3: Fetch players from template_players
-        cur.execute("""
-            SELECT * FROM template_players
-            WHERE team_name IN (%s, %s)
-        """, (team1, team2))
-        template_players = cur.fetchall()
-
-        if not template_players:
-            return jsonify({"message": f"No template players found for teams {team1} and {team2}"}), 404
-
-        # Step 4: Insert into players table
-        for p in template_players:
+            # Step 1: Insert match
             cur.execute("""
-                INSERT INTO players (
-                    match_id, player_name, role, team_name, credit_value, is_playing, position,
-                    fantasy_points, batting_style, bowling_style, nationality,
-                    player_type, team_id, image, country
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                match_id,
-                p['player_name'], p['role'], p['team_name'], p['credit_value'], p['is_playing'],
-                p['position'], p['fantasy_points'], p['batting_style'], p['bowling_style'],
-                p['nationality'], p['player_type'], p['team_id'], p['image'], p['country']
-            ))
+                INSERT INTO matches (match_name, start_time, end_time, status)
+                VALUES (%s, %s, %s, %s)
+            """, (match_name, start_time, end_time, status))
+            match_id = cur.lastrowid
+
+            # Step 2: Parse teams
+            sides = [s.strip().lower().replace(" ", "").replace("_", "") for s in re.split(r'vs|VS|Vs|vS', match_name) if s.strip()]
+            if len(sides) != 2:
+                return jsonify({"message": "❌ Could not parse 2 teams from match_name"}), 400
+
+            team_map = {
+                "ind": "India", "india": "India",
+                "pak": "Pakistan", "pakistan": "Pakistan",
+                "aus": "Australia", "australia": "Australia",
+                "eng": "England", "england": "England",
+                "sa": "South Africa", "southafrica": "South Africa", "south_africa": "South Africa",
+                "nz": "New Zealand", "newzealand": "New Zealand", "new_zealand": "New Zealand",
+                "sl": "Sri Lanka", "srilanka": "Sri Lanka", "sri_lanka": "Sri Lanka",
+                "ban": "Bangladesh", "bangladesh": "Bangladesh",
+                "afg": "Afghanistan", "afghanistan": "Afghanistan",
+                "wi": "West Indies", "westindies": "West Indies", "west_indies": "West Indies",
+                "zim": "Zimbabwe", "zimbabwe": "Zimbabwe",
+                "nam": "Namibia", "namibia": "Namibia",
+                "uae": "UAE", "nepal": "Nepal",
+                "ire": "Ireland", "ireland": "Ireland",
+                "sco": "Scotland", "scotland": "Scotland",
+                "ned": "Netherlands", "netherlands": "Netherlands"
+            }
+
+            team1 = team_map.get(sides[0])
+            team2 = team_map.get(sides[1])
+            if not team1 or not team2:
+                return jsonify({"message": f"❌ Unknown team(s) in match_name: {match_name}"}), 400
+
+            # Step 3: Fetch players from template_players
+            cur.execute("""
+                SELECT * FROM template_players
+                WHERE team_name IN (%s, %s)
+            """, (team1, team2))
+            template_players = cur.fetchall()
+
+            if not template_players:
+                return jsonify({"message": f"No template players found for teams {team1} and {team2}"}), 404
+
+            # Step 4: Insert into players table
+            for p in template_players:
+                cur.execute("""
+                    INSERT INTO players (
+                        match_id, player_name, role, team_name, credit_value, is_playing, position,
+                        fantasy_points, batting_style, bowling_style, nationality,
+                        player_type, team_id, image, country
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    match_id,
+                    p['player_name'], p['role'], p['team_name'], p['credit_value'], p['is_playing'],
+                    p['position'], p['fantasy_points'], p['batting_style'], p['bowling_style'],
+                    p['nationality'], p['player_type'], p['team_id'], p['image'], p['country']
+                ))
 
         db.commit()
         return jsonify({"message": "✅ Match and players added successfully", "match_id": match_id}), 201
@@ -1883,7 +1590,6 @@ def admin_create_match(current_user_email):
         return jsonify({"error": str(e)}), 500
 
 
-# DELETE CONTEST
 @app.route('/admin/delete_contest', methods=['POST'])
 @token_required
 def admin_delete_contest(current_user_email):
@@ -1898,20 +1604,20 @@ def admin_delete_contest(current_user_email):
         return jsonify({"message": "Contest ID required"}), 400
 
     try:
-        cursor = db.cursor()
+        with mysql_cursor(dictionary=False) as cursor:
+            if force:
+                print(f"⚠️ Force deleting contest {contest_id} — including entries")
+                cursor.execute("DELETE FROM entries WHERE contest_id = %s", (contest_id,))
 
-        if force:
-            print(f"⚠️ Force deleting contest {contest_id} — including entries")
-            cursor.execute("DELETE FROM entries WHERE contest_id = %s", (contest_id,))
+            cursor.execute("DELETE FROM contests WHERE id = %s", (contest_id,))
 
-        cursor.execute("DELETE FROM contests WHERE id = %s", (contest_id,))
         db.commit()
-        return jsonify({"message": "Contest deleted successfully!"})
+        return jsonify({"message": "✅ Contest deleted successfully!"})
 
     except Exception as err:
+        db.rollback()
         print("❌ Delete contest error:", err)
         return jsonify({"error": str(err)}), 500
-
 
 
 @app.route('/admin/contest/<int:contest_id>/entries', methods=['GET'])
@@ -1921,27 +1627,24 @@ def admin_list_entries(current_user_email, contest_id):
         return jsonify({"message": "Unauthorized"}), 403
 
     try:
-        cursor = db.cursor(dictionary=True)
+        with mysql_cursor(dictionary=True) as cursor:
+            cursor.execute("""
+                SELECT e.id AS entry_id, e.team_id, e.user_id, e.joined_at,
+                       u.username AS user_name,
+                       t.team_name AS team_name
+                FROM entries e
+                LEFT JOIN users u ON e.user_id = u.id
+                LEFT JOIN teams t ON e.team_id = t.id
+                WHERE e.contest_id = %s
+                ORDER BY e.joined_at ASC
+            """, (contest_id,))
+            entries = cursor.fetchall()
 
-        # ✅ This includes joined_at field
-        cursor.execute("""
-            SELECT e.id AS entry_id, e.team_id, e.user_id, e.joined_at,
-                   u.username AS user_name,
-                   t.team_name AS team_name
-            FROM entries e
-            LEFT JOIN users u ON e.user_id = u.id
-            LEFT JOIN teams t ON e.team_id = t.id
-            WHERE e.contest_id = %s
-            ORDER BY e.joined_at ASC
-        """, (contest_id,))
-
-        entries = cursor.fetchall()
         return jsonify(entries), 200
 
     except Exception as err:
         print(f"🔥 Error loading entries for contest {contest_id}:", err)
         return jsonify({"error": str(err)}), 500
-
 
 @app.route('/admin/delete_match', methods=['POST'])
 @token_required
@@ -1949,42 +1652,41 @@ def delete_match(current_user_email):
     if not is_admin_user(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
+    data = request.get_json()
+    match_id = data.get('id')
+    if not match_id:
+        return jsonify({"message": "Missing match ID"}), 400
+
     try:
-        data = request.get_json()
-        match_id = data.get('id')
-        if not match_id:
-            return jsonify({"message": "Missing match ID"}), 400
+        with mysql_cursor() as cur:
+            # Step 1: Get all contest_ids for this match
+            cur.execute("SELECT id FROM contests WHERE match_id = %s", (match_id,))
+            contest_ids = [row[0] for row in cur.fetchall()]
 
-        cur = db.cursor()
+            if contest_ids:
+                in_clause = ','.join(['%s'] * len(contest_ids))
 
-        # Step 1: Get all contest_ids for this match
-        cur.execute("SELECT id FROM contests WHERE match_id = %s", (match_id,))
-        contest_ids = [row[0] for row in cur.fetchall()]
+                # Step 2: Delete entries
+                cur.execute(f"DELETE FROM entries WHERE contest_id IN ({in_clause})", contest_ids)
 
-        if contest_ids:
-            in_clause = ','.join(['%s'] * len(contest_ids))
+                # Step 3: Delete prize distributions
+                cur.execute(f"DELETE FROM prize_distributions WHERE contest_id IN ({in_clause})", contest_ids)
 
-            # Step 2: Delete entries
-            cur.execute(f"DELETE FROM entries WHERE contest_id IN ({in_clause})", contest_ids)
+                # Step 4: Delete contests
+                cur.execute(f"DELETE FROM contests WHERE id IN ({in_clause})", contest_ids)
 
-            # Step 3: Delete prize distributions
-            cur.execute(f"DELETE FROM prize_distributions WHERE contest_id IN ({in_clause})", contest_ids)
+            # Step 5: Delete players of this match
+            cur.execute("DELETE FROM players WHERE match_id = %s", (match_id,))
 
-            # Step 4: Delete contests
-            cur.execute(f"DELETE FROM contests WHERE id IN ({in_clause})", contest_ids)
-
-        # Step 5: Delete players of this match
-        cur.execute("DELETE FROM players WHERE match_id = %s", (match_id,))
-
-        # Step 6: Delete match
-        cur.execute("DELETE FROM matches WHERE id = %s", (match_id,))
+            # Step 6: Delete match
+            cur.execute("DELETE FROM matches WHERE id = %s", (match_id,))
 
         db.commit()
-        return jsonify({"message": "Match and all related data deleted successfully"}), 200
+        return jsonify({"message": "✅ Match and all related data deleted successfully"}), 200
 
     except Exception as e:
         db.rollback()
-        app.logger.exception(e)
+        app.logger.exception("❌ Failed to delete match")
         return jsonify({"message": "Internal server error"}), 500
 
 
@@ -1995,32 +1697,31 @@ def admin_team_details(current_user_email, id):
         return jsonify({"message": "Unauthorized"}), 403
 
     try:
-        cursor = db.cursor(dictionary=True)
+        with mysql_cursor(dictionary=True) as cursor:
+            print("🔍 Fetching team with ID:", id)
 
-        print("🔍 Fetching team with ID:", id)
+            cursor.execute("SELECT team_name, players FROM teams WHERE id = %s", (id,))
+            team = cursor.fetchone()
+            print("🧠 Raw team:", team)
 
-        cursor.execute("SELECT team_name, players FROM teams WHERE id = %s", (id,))
-        team = cursor.fetchone()
-        print("🧠 Raw team:", team)
+            if not team:
+                return jsonify({"message": "Team not found"}), 404
 
-        if not team:
-            return jsonify({"message": "Team not found"}), 404
+            import json
+            try:
+                player_list = json.loads(team["players"])
+            except json.JSONDecodeError as err:
+                print("❌ JSON decode error:", err)
+                player_list = []
 
-        import json
-        try:
-            player_list = json.loads(team["players"])
-        except json.JSONDecodeError as err:
-            print("❌ JSON decode error:", err)
-            player_list = []
+            return jsonify({
+                "id": id,
+                "team_name": team["team_name"],
+                "players": player_list
+            }), 200
 
-        return jsonify({
-            "id": id,
-            "team_name": team["team_name"],
-            "players": player_list
-        }), 200
-
-    except mysql.connector.Error as err:
-        print(f"🔥 DB error:", err)
+    except Exception as err:
+        print("🔥 DB error:", err)
         return jsonify({"error": str(err)}), 500
 
 
@@ -2031,74 +1732,73 @@ def get_admin_users(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     try:
-        cursor = db.cursor(dictionary=True)
-        
-        # 1) Fetch user details and wallet summary
-        cursor.execute("""
-            SELECT 
-                u.id,
-                u.username,
-                u.email,
-                u.is_admin,
-                u.is_banned,
-                u.registered_at,
-                COALESCE(w.balance, 0) AS balance,
-                IFNULL((SELECT SUM(amount) FROM transactions 
-                        WHERE user_id = u.id AND type = 'credit'), 0) AS total_earning,
-                IFNULL((SELECT SUM(amount) FROM transactions 
-                        WHERE user_id = u.id AND type = 'debit'), 0) AS total_loss,
-                IFNULL((SELECT COUNT(*) FROM entries WHERE user_id = u.id), 0) AS contest_count,
-                (SELECT MAX(joined_at) FROM entries WHERE user_id = u.id) AS last_contest_date
-            FROM users u
-            LEFT JOIN wallets w ON u.id = w.user_id
-        """)
-        
-        users = cursor.fetchall()
-
-        # 2) Build each user's 7-day credit/debit net trend
-        for u in users:
+        with mysql_cursor(dictionary=True) as cursor:
+            # 1) Fetch user details and wallet summary
             cursor.execute("""
                 SELECT 
-                    DATE(created_at) AS day,
-                    SUM(
-                        CASE 
-                            WHEN type = 'credit' THEN amount
-                            ELSE -amount
-                        END
-                    ) AS net
-                FROM transactions
-                WHERE user_id = %s
-                  AND created_at >= NOW() - INTERVAL 7 DAY
-                GROUP BY day
-                ORDER BY day ASC
-            """, (u["id"],))
-            trend = cursor.fetchall()
-            u["daily_trend"] = [
-                {
-                    "day": row["day"].strftime("%a"),
-                    "net": float(row["net"] or 0)
-                }
-                for row in trend
-            ]
+                    u.id,
+                    u.username,
+                    u.email,
+                    u.is_admin,
+                    u.is_banned,
+                    u.registered_at,
+                    COALESCE(w.balance, 0) AS balance,
+                    IFNULL((SELECT SUM(amount) FROM transactions 
+                            WHERE user_id = u.id AND type = 'credit'), 0) AS total_earning,
+                    IFNULL((SELECT SUM(amount) FROM transactions 
+                            WHERE user_id = u.id AND type = 'debit'), 0) AS total_loss,
+                    IFNULL((SELECT COUNT(*) FROM entries WHERE user_id = u.id), 0) AS contest_count,
+                    (SELECT MAX(joined_at) FROM entries WHERE user_id = u.id) AS last_contest_date
+                FROM users u
+                LEFT JOIN wallets w ON u.id = w.user_id
+            """)
+            
+            users = cursor.fetchall()
 
-        # 3) Prepare JSON response for frontend
-        return jsonify([
-            {
-                "user_id":         u["id"],
-                "name":            u["username"],
-                "email":           u["email"],
-                "wallet":          float(u["balance"]),
-                "is_admin":        bool(u["is_admin"]),
-                "is_banned":       bool(u["is_banned"]),
-                "total_earning":   float(u["total_earning"]),
-                "total_loss":      float(u["total_loss"]),
-                "contest_count":   int(u["contest_count"]),
-                "last_contest_date": u["last_contest_date"],
-                "registered_at":   u["registered_at"],
-                "daily_trend":     u["daily_trend"]
-            }
-            for u in users
-        ])
+            # 2) Build each user's 7-day credit/debit net trend
+            for u in users:
+                cursor.execute("""
+                    SELECT 
+                        DATE(created_at) AS day,
+                        SUM(
+                            CASE 
+                                WHEN type = 'credit' THEN amount
+                                ELSE -amount
+                            END
+                        ) AS net
+                    FROM transactions
+                    WHERE user_id = %s
+                      AND created_at >= NOW() - INTERVAL 7 DAY
+                    GROUP BY day
+                    ORDER BY day ASC
+                """, (u["id"],))
+                trend = cursor.fetchall()
+                u["daily_trend"] = [
+                    {
+                        "day": row["day"].strftime("%a"),
+                        "net": float(row["net"] or 0)
+                    }
+                    for row in trend
+                ]
+
+            # 3) Prepare JSON response for frontend
+            return jsonify([
+                {
+                    "user_id":         u["id"],
+                    "name":            u["username"],
+                    "email":           u["email"],
+                    "wallet":          float(u["balance"]),
+                    "is_admin":        bool(u["is_admin"]),
+                    "is_banned":       bool(u["is_banned"]),
+                    "total_earning":   float(u["total_earning"]),
+                    "total_loss":      float(u["total_loss"]),
+                    "contest_count":   int(u["contest_count"]),
+                    "last_contest_date": u["last_contest_date"],
+                    "registered_at":   u["registered_at"],
+                    "daily_trend":     u["daily_trend"]
+                }
+                for u in users
+            ])
 
     except Exception as err:
         print("🔥 DB error:", err)
@@ -2117,28 +1817,26 @@ def admin_password_reset(current_user_email):
     new_password = data.get("new_password")
 
     hashed = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
-    cursor.execute("UPDATE users SET password = %s WHERE id = %s", (hashed, user_id))
+
+    with mysql_cursor() as cursor:
+        cursor.execute("UPDATE users SET password = %s WHERE id = %s", (hashed, user_id))
     db.commit()
 
     return jsonify({"message": f"Password for user #{user_id} has been reset ✅"})
-
 
 @app.route('/admin/user_earnings/<int:user_id>', methods=['GET'])
 @token_required
 def get_user_earnings(user_id):
     try:
-        cursor = db.cursor(dictionary=True)
+        with mysql_cursor(dictionary=True) as cursor:
+            cursor.execute("""
+                SELECT type, amount, message, timestamp
+                FROM transactions
+                WHERE user_id = %s
+                ORDER BY timestamp DESC
+            """, (user_id,))
+            history = cursor.fetchall()
 
-        # Fetch all transactions
-        cursor.execute("""
-            SELECT type, amount, message, timestamp
-            FROM transactions
-            WHERE user_id = %s
-            ORDER BY timestamp DESC
-        """, (user_id,))
-        history = cursor.fetchall()
-
-        # Calculate totals
         total_earnings = sum(t["amount"] for t in history if t["type"] == "credit")
         total_losses = sum(t["amount"] for t in history if t["type"] == "debit")
 
@@ -2152,53 +1850,37 @@ def get_user_earnings(user_id):
         return jsonify({"error": str(err)}), 500
 
 
-
-
-
-
 @app.route('/admin/wallet_adjust', methods=['POST', 'OPTIONS'])
 @token_required
 def adjust_wallet(current_user_email):
-    # 1) CORS preflight
     if request.method == 'OPTIONS':
         return make_response('', 204)
 
-    # 2) Only admins can adjust
     if not is_admin_user(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     try:
-        # 3) Parse payload
         data    = request.get_json(force=True)
         user_id = data['user_id']
         amount  = float(data['amount'])
         note    = data.get('note', '')
 
-        cursor = db.cursor()
-
-        # 4) Update existing wallet, or insert one if missing
-        cursor.execute(
-            "UPDATE wallets SET balance = balance + %s WHERE user_id = %s",
-            (amount, user_id)
-        )
-        if cursor.rowcount == 0:
+        with mysql_cursor() as cursor:
             cursor.execute(
-                "INSERT INTO wallets (user_id, balance) VALUES (%s, %s)",
-                (user_id, amount)
+                "UPDATE wallets SET balance = balance + %s WHERE user_id = %s",
+                (amount, user_id)
             )
+            if cursor.rowcount == 0:
+                cursor.execute(
+                    "INSERT INTO wallets (user_id, balance) VALUES (%s, %s)",
+                    (user_id, amount)
+                )
 
-        # 5) Record the transaction in `transactions.description`
-        cursor.execute(
-            "INSERT INTO transactions "
-            "(user_id, type, amount, description) "
-            "VALUES (%s, %s, %s, %s)",
-            (
-                user_id,
-                "credit" if amount > 0 else "debit",
-                abs(amount),
-                note
+            cursor.execute(
+                "INSERT INTO transactions (user_id, type, amount, description) "
+                "VALUES (%s, %s, %s, %s)",
+                (user_id, "credit" if amount > 0 else "debit", abs(amount), note)
             )
-        )
 
         db.commit()
         return jsonify({"message": "Wallet adjusted"}), 200
@@ -2209,27 +1891,23 @@ def adjust_wallet(current_user_email):
         return jsonify({"error": str(e)}), 500
 
 
-
-
 @app.route('/admin/toggle_admin', methods=['POST'])
 @token_required
 def toggle_admin(current_user_email):
     data = request.get_json()
     user_id = data['user_id']
     try:
-        cursor = db.cursor()
-        cursor.execute("""
-            UPDATE users 
-            SET is_admin = 1 - is_admin 
-            WHERE id = %s
-        """, (user_id,))
+        with mysql_cursor() as cursor:
+            cursor.execute("""
+                UPDATE users 
+                SET is_admin = 1 - is_admin 
+                WHERE id = %s
+            """, (user_id,))
         db.commit()
         return jsonify({"message": "Admin status toggled"}), 200
     except Exception as e:
         db.rollback()
         return jsonify({"error": str(e)}), 500
-
-
 
 @app.route('/admin/ban_user', methods=['POST'])
 @token_required
@@ -2243,18 +1921,18 @@ def ban_user(current_user_email):
         return jsonify({"message": "user_id required"}), 400
 
     try:
-        cursor = db.cursor()
-        # Flip is_banned: 1 → 0 or 0 → 1
-        cursor.execute("SELECT is_banned FROM users WHERE id = %s", (user_id,))
-        row = cursor.fetchone()
-        if not row:
-            return jsonify({"message": "User not found"}), 404
-        new_flag = 1 - int(row[0])
+        with mysql_cursor() as cursor:
+            cursor.execute("SELECT is_banned FROM users WHERE id = %s", (user_id,))
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({"message": "User not found"}), 404
 
-        cursor.execute(
-            "UPDATE users SET is_banned = %s WHERE id = %s",
-            (new_flag, user_id)
-        )
+            new_flag = 1 - int(row[0])
+
+            cursor.execute(
+                "UPDATE users SET is_banned = %s WHERE id = %s",
+                (new_flag, user_id)
+            )
         db.commit()
         return jsonify({
             "message": "Ban status updated",
@@ -2265,83 +1943,73 @@ def ban_user(current_user_email):
         db.rollback()
         return jsonify({"message": str(e)}), 500
 
-
-
-
-
 @app.route('/admin/user_transactions/<int:user_id>', methods=['GET','OPTIONS'])
 @token_required
 def get_user_transactions(current_user_email, user_id):
-    # 1) Allow preflight through
     if request.method == 'OPTIONS':
         return make_response('', 204)
 
-    # 2) Only admins
     if not is_admin_user(current_user_email):
         return jsonify({"message": "Unauthorized"}), 403
 
     try:
-        cursor = db.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT created_at, type, amount, description
-            FROM transactions
-            WHERE user_id = %s
-            ORDER BY created_at DESC
-        """, (user_id,))
-        rows = cursor.fetchall()
+        with mysql_cursor(dictionary=True) as cursor:
+            cursor.execute("""
+                SELECT created_at, type, amount, description
+                FROM transactions
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+            """, (user_id,))
+            rows = cursor.fetchall()
 
-        total_earn = 0.0
-        total_loss = 0.0
-        enriched   = []
+            total_earn = 0.0
+            total_loss = 0.0
+            enriched   = []
 
-        for r in rows:
-            amt = float(r['amount'] or 0)
-            if r['type'] == 'credit':
-                total_earn += amt
-            else:
-                total_loss += amt
+            for r in rows:
+                amt = float(r['amount'] or 0)
+                if r['type'] == 'credit':
+                    total_earn += amt
+                else:
+                    total_loss += amt
 
-            # default blanks
-            contest_name = ''
-            match_title  = ''
+                contest_name = ''
+                match_title  = ''
+                desc = r.get('description') or ''
 
-            # only for entry-fee debits that say "Joined contest ID X"
-            desc = r.get('description') or ''
-            if r['type'] == 'debit' and 'Joined contest ID' in desc:
-                try:
-                    cid = int(desc.split('Joined contest ID')[1].strip())
+                if r['type'] == 'debit' and 'Joined contest ID' in desc:
+                    try:
+                        cid = int(desc.split('Joined contest ID')[1].strip())
 
-                    # fetch contest_name & its match_id
-                    cursor.execute("""
-                        SELECT contest_name, match_id
-                        FROM contests
-                        WHERE id = %s
-                    """, (cid,))
-                    cm = cursor.fetchone()
-                    if cm:
-                        contest_name = cm['contest_name'] or ''
-                        mid = cm['match_id']
-                        if mid:
-                            # fetch the real match_name
-                            cursor.execute("""
-                                SELECT match_name
-                                FROM matches
-                                WHERE id = %s
-                            """, (mid,))
-                            mm = cursor.fetchone()
-                            if mm:
-                                match_title = mm['match_name'] or ''
-                except Exception:
-                    pass   # on any parse/join error just leave blanks
+                        cursor.execute("""
+                            SELECT contest_name, match_id
+                            FROM contests
+                            WHERE id = %s
+                        """, (cid,))
+                        cm = cursor.fetchone()
+                        if cm:
+                            contest_name = cm['contest_name'] or ''
+                            mid = cm['match_id']
+                            if mid:
+                                cursor.execute("""
+                                    SELECT match_name
+                                    FROM matches
+                                    WHERE id = %s
+                                """, (mid,))
+                                mm = cursor.fetchone()
+                                if mm:
+                                    match_title = mm['match_name'] or ''
+                    except Exception:
+                        pass  # skip if anything fails
 
-            enriched.append({
-                "created_at":   r['created_at'].isoformat(),
-                "type":         r['type'],
-                "amount":       amt,
-                "description":  desc,
-                "contest_name": contest_name,
-                "match_title":  match_title
-            })
+                enriched.append({
+                    "created_at":   r['created_at'].isoformat(),
+                    "type":         r['type'],
+                    "amount":       amt,
+                    "description":  desc,
+                    "contest_name": contest_name,
+                    "match_title":  match_title
+                })
 
         return jsonify({
             "transactions": enriched,
@@ -2352,8 +2020,10 @@ def get_user_transactions(current_user_email, user_id):
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-    
 
+
+
+    
 
 @app.route('/admin/commissions', methods=['GET', 'OPTIONS'])
 @token_required
@@ -2365,21 +2035,21 @@ def commissions(current_user_email):
         return jsonify({'message': 'Unauthorized'}), 403
 
     try:
-        cur = db.cursor(dictionary=True)
-        cur.execute("""
-            SELECT
-                c.id                    AS contest_id,
-                c.contest_name,
-                c.entry_fee,
-                c.joined_users,
-                c.commission_percentage,
-                m.match_name            AS match_name,
-                (c.entry_fee * c.joined_users * c.commission_percentage / 100) AS commission
-            FROM contests c
-            JOIN matches m ON c.match_id = m.id
-            ORDER BY commission DESC
-        """)
-        rows = cur.fetchall()
+        with mysql_cursor(dictionary=True) as cur:
+            cur.execute("""
+                SELECT
+                    c.id                    AS contest_id,
+                    c.contest_name,
+                    c.entry_fee,
+                    c.joined_users,
+                    c.commission_percentage,
+                    m.match_name            AS match_name,
+                    (c.entry_fee * c.joined_users * c.commission_percentage / 100) AS commission
+                FROM contests c
+                JOIN matches m ON c.match_id = m.id
+                ORDER BY commission DESC
+            """)
+            rows = cur.fetchall()
 
         result = [{
             'contest_id':             r['contest_id'],
@@ -2398,33 +2068,31 @@ def commissions(current_user_email):
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
-
-
-@app.route('/admin/prize_distributions', methods=['GET','OPTIONS'])
+@app.route('/admin/prize_distributions', methods=['GET', 'OPTIONS'])
 @token_required
 def prize_distributions(current_user_email):
     if request.method == 'OPTIONS':
         return make_response('', 204)
 
     if not is_admin_user(current_user_email):
-        return jsonify({'message':'Unauthorized'}), 403
+        return jsonify({'message': 'Unauthorized'}), 403
 
     try:
-        cur = db.cursor(dictionary=True)
-        cur.execute("""
-            SELECT
-              t.id,
-              t.user_id,
-              u.username,
-              t.amount,
-              t.description,
-              t.created_at AS date
-            FROM transactions t
-            JOIN users u ON t.user_id = u.id
-            WHERE t.type = 'credit'
-            ORDER BY t.created_at DESC
-        """)
-        rows = cur.fetchall()
+        with mysql_cursor(dictionary=True) as cur:
+            cur.execute("""
+                SELECT
+                  t.id,
+                  t.user_id,
+                  u.username,
+                  t.amount,
+                  t.description,
+                  t.created_at AS date
+                FROM transactions t
+                JOIN users u ON t.user_id = u.id
+                WHERE t.type = 'credit'
+                ORDER BY t.created_at DESC
+            """)
+            rows = cur.fetchall()
 
         result = [{
             'id':          r['id'],
@@ -2438,7 +2106,8 @@ def prize_distributions(current_user_email):
         return jsonify(result), 200
 
     except Exception as e:
-        import traceback; traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -2447,168 +2116,160 @@ def prize_distributions(current_user_email):
 from datetime import datetime, timedelta
 from flask import jsonify, request
 import mysql.connector
-
 @app.route('/user/dashboard', methods=['GET'])
 @token_required
 def user_dashboard(current_user_email):
     try:
-        # parse range (days) query param
         days = int(request.args.get('range', 7))
         since = datetime.utcnow() - timedelta(days=days)
 
-        # dict cursor
-        cur = db.cursor(dictionary=True)
+        with db.cursor(dictionary=True) as cur:
+            # 1) Get user_id
+            cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+            user = cur.fetchone()
+            if not user:
+                return jsonify({"message": "User not found"}), 404
+            uid = user['id']
 
-        # 1) Get user_id
-        cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
-        user = cur.fetchone()
-        if not user:
-            return jsonify({"message":"User not found"}), 404
-        uid = user['id']
+            # 2) Wallet balance
+            cur.execute("SELECT balance FROM wallets WHERE user_id=%s", (uid,))
+            row = cur.fetchone()
+            wallet = float(row['balance'] or 0) if row else 0
 
-        # 2) Wallet balance
-        cur.execute("SELECT balance FROM wallets WHERE user_id=%s", (uid,))
-        row = cur.fetchone()
-        wallet = float(row['balance'] or 0) if row else 0
+            # 3) Earnings & spend & net in range
+            cur.execute("""
+                SELECT 
+                    SUM(CASE WHEN t.type='credit' THEN t.amount ELSE 0 END) AS earnings,
+                    SUM(CASE WHEN t.type='debit'  THEN t.amount ELSE 0 END) AS spend
+                FROM transactions t
+                WHERE t.user_id=%s AND t.created_at >= %s
+            """, (uid, since))
+            stats = cur.fetchone()
+            total_earnings = float(stats['earnings'] or 0)
+            total_spend = float(stats['spend'] or 0)
+            net_balance = total_earnings - total_spend
 
-        # 3) Earnings & spend & net in range
-        cur.execute("""
-          SELECT 
-            SUM(CASE WHEN t.type='credit' THEN t.amount ELSE 0 END) AS earnings,
-            SUM(CASE WHEN t.type='debit'  THEN t.amount ELSE 0 END) AS spend
-          FROM transactions t
-          WHERE t.user_id=%s AND t.created_at >= %s
-        """, (uid, since))
-        stats = cur.fetchone()
-        total_earnings = float(stats['earnings'] or 0)
-        total_spend    = float(stats['spend']    or 0)
-        net_balance    = total_earnings - total_spend
+            # 4) Daily net history
+            cur.execute("""
+                SELECT 
+                    DATE(t.created_at) AS day,
+                    SUM(CASE WHEN t.type='credit' THEN t.amount ELSE -t.amount END) AS net
+                FROM transactions t
+                WHERE t.user_id=%s AND t.created_at >= %s
+                GROUP BY day
+                ORDER BY day
+            """, (uid, since))
+            dailyNetHistory = [
+                {"day": r["day"].isoformat(), "net": float(r["net"])}
+                for r in cur.fetchall()
+            ]
 
-        # 4) Daily net history
-        cur.execute("""
-          SELECT 
-            DATE(t.created_at)        AS day,
-            SUM(
-              CASE WHEN t.type='credit' THEN t.amount 
-                   ELSE -t.amount END
-            ) AS net
-          FROM transactions t
-          WHERE t.user_id=%s AND t.created_at >= %s
-          GROUP BY day
-          ORDER BY day
-        """, (uid, since))
-        dailyNetHistory = [
-          {"day": r["day"].isoformat(), "net": float(r["net"])} 
-          for r in cur.fetchall()
-        ]
-
-        # 5) Active contests (upcoming or live)
-        cur.execute("""
-          SELECT 
-            uc.id          AS entry_id,
-            c.id           AS contest_id,
-            c.contest_name,
-            c.prize_pool
-          FROM user_contests uc
-          JOIN contests c ON uc.contest_id = c.id
-          JOIN matches m ON c.match_id    = m.id
-          WHERE uc.user_id=%s 
-            AND UPPER(m.status) IN ('UPCOMING','LIVE')
-        """, (uid,))
-        activeContests = [
-          {
-            "entry_id":      r["entry_id"],
-            "contest_id":    r["contest_id"],
-            "contest_name":  r["contest_name"],
-            "prize_pool":    float(r["prize_pool"])
-          }
-          for r in cur.fetchall()
-        ]
-
-        # 6) Upcoming matches + contests
-        cur.execute("""
-          SELECT
-            m.id               AS match_id,
-            m.match_name,
-            m.start_time,
-            c.id               AS contest_id,
-            c.contest_name,
-            c.prize_pool,
-            IFNULL(c.joined_users, 0) AS joined_users,
-            IFNULL(c.max_users, 0)    AS max_users 
-          FROM matches m
-          JOIN contests c ON c.match_id = m.id
-          WHERE UPPER(m.status) = 'UPCOMING'
-          ORDER BY m.start_time, c.prize_pool DESC
-        """)
-        rows = cur.fetchall()
-        matches = {}
-        for r in rows:
-            mid = r["match_id"]
-            if mid not in matches:
-                matches[mid] = {
-                  "id": mid,
-                  "match_name": r["match_name"],
-                  "start_time": r["start_time"].isoformat(),
-                  "contests": []
+            # 5) Active contests
+            cur.execute("""
+                SELECT 
+                    uc.id AS entry_id,
+                    c.id AS contest_id,
+                    c.contest_name,
+                    c.prize_pool
+                FROM user_contests uc
+                JOIN contests c ON uc.contest_id = c.id
+                JOIN matches m ON c.match_id = m.id
+                WHERE uc.user_id=%s 
+                  AND UPPER(m.status) IN ('UPCOMING','LIVE')
+            """, (uid,))
+            activeContests = [
+                {
+                    "entry_id": r["entry_id"],
+                    "contest_id": r["contest_id"],
+                    "contest_name": r["contest_name"],
+                    "prize_pool": float(r["prize_pool"])
                 }
-            matches[mid]["contests"].append({
-                "contest_id":   r["contest_id"],
-                "contest_name": r["contest_name"],
-                "prize_pool":   float(r["prize_pool"]),
-                "entries":      int(r["joined_users"] or 0),
-                "max_entries":  int(r["max_users"] or 0)
-            })
+                for r in cur.fetchall()
+            ]
 
-        # 7) User teams for upcoming matches
-        cur.execute("""
-            SELECT 
-                t.id           AS team_id,
-        t.team_name,
-        t.contest_id,
-        t.total_points,
-        t.players,
-        m.id           AS match_id,
-        m.match_name
-    FROM teams t
-    JOIN contests c ON t.contest_id = c.id
-    JOIN matches m  ON c.match_id   = m.id
-    WHERE t.user_id = %s
-      AND UPPER(m.status) = 'UPCOMING'
-        """, (uid,))
-        userTeams = [
-            {
-                 "team_id":      r["team_id"],
-        "team_name":    r["team_name"],
-        "match_id":     r["match_id"],
-        "match_name":   r["match_name"],
-        "contest_id":   r["contest_id"],
-        "total_points": r["total_points"],
-        "players":      r["players"]
-            }
-            for r in cur.fetchall()
-        ]
+            # 6) Upcoming matches + contests
+            cur.execute("""
+                SELECT
+                    m.id AS match_id,
+                    m.match_name,
+                    m.start_time,
+                    c.id AS contest_id,
+                    c.contest_name,
+                    c.prize_pool,
+                    IFNULL(c.joined_users, 0) AS joined_users,
+                    IFNULL(c.max_users, 0) AS max_users 
+                FROM matches m
+                JOIN contests c ON c.match_id = m.id
+                WHERE UPPER(m.status) = 'UPCOMING'
+                ORDER BY m.start_time, c.prize_pool DESC
+            """)
+            rows = cur.fetchall()
+            matches = {}
+            for r in rows:
+                mid = r["match_id"]
+                if mid not in matches:
+                    matches[mid] = {
+                        "id": mid,
+                        "match_name": r["match_name"],
+                        "start_time": r["start_time"].isoformat(),
+                        "contests": []
+                    }
+                matches[mid]["contests"].append({
+                    "contest_id": r["contest_id"],
+                    "contest_name": r["contest_name"],
+                    "prize_pool": float(r["prize_pool"]),
+                    "entries": int(r["joined_users"] or 0),
+                    "max_entries": int(r["max_users"] or 0)
+                })
 
-        # Final response
+            # 7) User teams for upcoming matches
+            cur.execute("""
+                SELECT 
+                    t.id AS team_id,
+                    t.team_name,
+                    t.contest_id,
+                    t.total_points,
+                    t.players,
+                    m.id AS match_id,
+                    m.match_name
+                FROM teams t
+                JOIN contests c ON t.contest_id = c.id
+                JOIN matches m ON c.match_id = m.id
+                WHERE t.user_id = %s
+                  AND UPPER(m.status) = 'UPCOMING'
+            """, (uid,))
+            userTeams = [
+                {
+                    "team_id": r["team_id"],
+                    "team_name": r["team_name"],
+                    "match_id": r["match_id"],
+                    "match_name": r["match_name"],
+                    "contest_id": r["contest_id"],
+                    "total_points": r["total_points"],
+                    "players": r["players"]
+                }
+                for r in cur.fetchall()
+            ]
+
         return jsonify({
-            "wallet_balance":  wallet,
-            "total_earnings":  total_earnings,
-            "total_spend":     total_spend,
-            "net_balance":     net_balance,
+            "wallet_balance": wallet,
+            "total_earnings": total_earnings,
+            "total_spend": total_spend,
+            "net_balance": net_balance,
             "dailyNetHistory": dailyNetHistory,
-            "activeContests":  list(activeContests),
+            "activeContests": activeContests,
             "upcomingMatches": list(matches.values()),
-            "userTeams":       userTeams,
-            "user_email":      current_user_email
+            "userTeams": userTeams,
+            "user_email": current_user_email
         }), 200
 
     except mysql.connector.Error as err:
         app.logger.error("DB error: %s", err)
-        return jsonify({"message":"Database error","error":str(err)}), 500
+        return jsonify({"message": "Database error", "error": str(err)}), 500
 
     except Exception as e:
         app.logger.exception("Server error")
-        return jsonify({"message":"Internal server error","error":str(e)}), 500
+        return jsonify({"message": "Internal server error", "error": str(e)}), 500
 
 
 
@@ -2765,31 +2426,36 @@ def generate_team(current_user_email, match_id):
 
         # 2) Fetch user
         cur = db.cursor(dictionary=True)
-        cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+        cur.execute(
+            "SELECT id FROM users WHERE email=%s",
+            (current_user_email,)
+        )
         user = cur.fetchone()
         if not user:
             return jsonify({"message": "User not found"}), 404
         user_id = user["id"]
 
         # 3) Load player pool
-        cur.execute("""
-    SELECT 
-        id, 
-        player_name, 
-        LOWER(
-            CASE 
-                WHEN role = 'Wicket-Keeper' THEN 'keeper'
-                WHEN role = 'All-Rounder' THEN 'allrounder'
-                ELSE role
-            END
-        ) AS role,
-        credit_value, 
-        team_name
-    FROM players 
-    WHERE match_id=%s
-""", (match_id,))
+        cur.execute(
+            """
+            SELECT 
+                id, 
+                player_name, 
+                LOWER(
+                    CASE 
+                        WHEN role = 'Wicket-Keeper' THEN 'keeper'
+                        WHEN role = 'All-Rounder' THEN 'allrounder'
+                        ELSE role
+                    END
+                ) AS role,
+                credit_value, 
+                team_name
+            FROM players 
+            WHERE match_id=%s
+            """,
+            (match_id,)
+        )
 
-        
         pool = cur.fetchall()
         if not pool:
             return jsonify({"message": "No players found for this match"}), 404
@@ -2820,8 +2486,11 @@ def generate_team(current_user_email, match_id):
 
         # 5) Count existing AI entries
         cur.execute(
-            "SELECT COUNT(*) AS cnt FROM entries "
-            "WHERE contest_id = %s AND user_id = %s",
+            """
+            SELECT COUNT(*) AS cnt 
+            FROM entries 
+            WHERE contest_id = %s AND user_id = %s
+            """,
             (contest_id, user_id)
         )
         existing = cur.fetchone()["cnt"]
@@ -2858,18 +2527,21 @@ def generate_team(current_user_email, match_id):
             last_strength = sum(p["credit_value"] for p in squad) + 2
 
             # insert team
-            team_name = f"AI Team {existing + i + 1}"
             cur.execute(
-                "INSERT INTO teams (team_name, players, user_id, contest_id, strength_score) "
-                "VALUES (%s,%s,%s,%s,%s)",
-                (team_name, json.dumps(squad, default=str), user_id, contest_id, last_strength)
+                """
+                INSERT INTO teams (team_name, players, user_id, contest_id, strength_score) 
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (f"AI Team {existing + i + 1}", json.dumps(squad, default=str), user_id, contest_id, last_strength)
             )
             team_id = cur.lastrowid
 
             # insert entry
             cur.execute(
-                "INSERT INTO entries (contest_id, user_id, team_id) "
-                "VALUES (%s,%s,%s)",
+                """
+                INSERT INTO entries (contest_id, user_id, team_id) 
+                VALUES (%s, %s, %s)
+                """,
                 (contest_id, user_id, team_id)
             )
             team_ids.append(team_id)
@@ -2896,24 +2568,21 @@ def generate_team(current_user_email, match_id):
 @token_required
 def get_players_with_contest_stats(current_user_email, match_id):
     try:
-        # read contest_id to calculate "% taken" among joined teams
         contest_id = request.args.get('contest_id', type=int)
 
-        # use a dict cursor for easier enrichment
         cur = db.cursor(dictionary=True)
         cur.execute("""
-          SELECT id, player_name, role
-          FROM players
-          WHERE match_id = %s
+            SELECT id, player_name, role
+            FROM players
+            WHERE match_id = %s
         """, (match_id,))
         players = cur.fetchall()
 
-        # initialize counts
+        # Initialize counts
         for p in players:
             p['taken_count'] = 0
             p['taken_percent'] = 0
 
-        # if contest_id supplied, compute how many joined teams picked each player
         if contest_id:
             cur.execute(
                 "SELECT COUNT(*) AS total FROM entries WHERE contest_id = %s",
@@ -2924,18 +2593,13 @@ def get_players_with_contest_stats(current_user_email, match_id):
             if total > 0:
                 for p in players:
                     cur.execute("""
-                      SELECT COUNT(*) AS cnt
-                      FROM entries e
-                      JOIN teams t ON e.team_id = t.id
-                      WHERE e.contest_id = %s
-                        AND JSON_CONTAINS(
-                              t.players,
-                              JSON_OBJECT('player_name', %s),
-                              '$'
-                            )
+                        SELECT COUNT(*) AS cnt
+                        FROM entries e
+                        JOIN teams t ON e.team_id = t.id
+                        WHERE e.contest_id = %s
+                          AND JSON_CONTAINS(t.players, JSON_OBJECT('player_name', %s), '$')
                     """, (contest_id, p['player_name']))
                     cnt = cur.fetchone()['cnt'] or 0
-
                     p['taken_count'] = cnt
                     p['taken_percent'] = round(cnt * 100 / total)
 
@@ -2946,41 +2610,45 @@ def get_players_with_contest_stats(current_user_email, match_id):
         return jsonify({"message": "Failed to load players"}), 500
 
 
-
 @app.route('/user/contest/<int:contest_id>/entries')
 @token_required
 def user_entries(current_user_email, contest_id):
-    cur = db.cursor(dictionary=True)
+    try:
+        cur = db.cursor(dictionary=True)
 
-    # Get user ID
-    cur.execute("SELECT id, username FROM users WHERE email = %s", (current_user_email,))
-    user_row = cur.fetchone()
-    if not user_row:
-        return jsonify({"message": "User not found"}), 404
+        # Get user ID and username
+        cur.execute("SELECT id, username FROM users WHERE email = %s", (current_user_email,))
+        user_row = cur.fetchone()
+        if not user_row:
+            return jsonify({"message": "User not found"}), 404
 
-    user_id = user_row["id"]
-    username = user_row["username"]
+        user_id = user_row["id"]
+        username = user_row["username"]
 
-    # Fetch only entries created by this user
-    cur.execute("""
-        SELECT
-            e.id,
-            t.team_name,
-            t.players,
-            t.total_points,
-            t.strength_score,
-            t.rating, 
-            e.joined_at,
-            %s AS username,
-            t.id AS team_id
-        FROM entries e
-        JOIN teams t ON e.team_id = t.id
-        WHERE e.contest_id = %s AND e.user_id = %s
-        ORDER BY e.joined_at DESC
-    """, (username, contest_id, user_id))
+        # Fetch user entries
+        cur.execute("""
+            SELECT
+                e.id,
+                t.team_name,
+                t.players,
+                t.total_points,
+                t.strength_score,
+                t.rating, 
+                e.joined_at,
+                %s AS username,
+                t.id AS team_id
+            FROM entries e
+            JOIN teams t ON e.team_id = t.id
+            WHERE e.contest_id = %s AND e.user_id = %s
+            ORDER BY e.joined_at DESC
+        """, (username, contest_id, user_id))
 
-    rows = cur.fetchall()
-    return jsonify({"entries": rows})
+        rows = cur.fetchall()
+        return jsonify({"entries": rows})
+
+    except Exception as e:
+        app.logger.exception(e)
+        return jsonify({"message": "Failed to load user entries"}), 500
 
 
 
@@ -2989,19 +2657,19 @@ def user_entries(current_user_email, contest_id):
 @token_required
 def get_user_team(current_user_email, team_id):
     if request.method == 'OPTIONS':
-        return '', 204  # Handle CORS preflight
+        return '', 204  # CORS preflight
 
     try:
         cur = db.cursor(dictionary=True)
 
-        # Find the logged-in user's ID
+        # Get user ID
         cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
         user_row = cur.fetchone()
         if not user_row:
             return jsonify({"message": "User not found"}), 404
         user_id = user_row["id"]
 
-        # Retrieve the team if it belongs to the user
+        # Get team only if belongs to user
         cur.execute("""
             SELECT team_name, players
             FROM teams
@@ -3027,68 +2695,73 @@ def get_user_team(current_user_email, team_id):
 @app.route('/user/contest/<int:contest_id>/unjoined-teams')
 @token_required
 def unjoined_teams_for_user(current_user_email, contest_id):
-    cur = db.cursor(dictionary=True)
-    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
-    user = cur.fetchone()
-    if not user:
-        return jsonify({"message": "User not found"}), 404
-    user_id = user["id"]
+    try:
+        cur = db.cursor(dictionary=True)
 
-    cur.execute("""
-      SELECT t.id AS team_id, t.team_name, t.strength_score, t.created_at
-      FROM teams t
-      WHERE t.user_id = %s
-        AND NOT EXISTS (
-          SELECT 1 FROM entries e
-          WHERE e.team_id = t.id AND e.contest_id = %s
-        )
-    """, (user_id, contest_id))
-    return jsonify({ "teams": cur.fetchall() })
+        cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+        user = cur.fetchone()
+        if not user:
+            return jsonify({"message": "User not found"}), 404
+        user_id = user["id"]
 
+        cur.execute("""
+            SELECT t.id AS team_id, t.team_name, t.strength_score, t.created_at
+            FROM teams t
+            WHERE t.user_id = %s
+              AND NOT EXISTS (
+                SELECT 1 FROM entries e
+                WHERE e.team_id = t.id AND e.contest_id = %s
+              )
+        """, (user_id, contest_id))
+        teams = cur.fetchall()
+
+        return jsonify({"teams": teams})
+
+    except Exception as e:
+        app.logger.exception("🛑 Failed to fetch unjoined teams:")
+        return jsonify({"message": "Internal Server Error"}), 500
 
 
 @app.route('/join_contest_bulk', methods=['POST'])
 @token_required
 def join_contest_bulk(current_user_email):
-    data = request.get_json() or {}
-    contest_id = data.get("contest_id")
-    team_ids = data.get("team_ids")  # list of team IDs
+    try:
+        data = request.get_json() or {}
+        contest_id = data.get("contest_id")
+        team_ids = data.get("team_ids")  # expecting list
 
-    if not contest_id or not team_ids:
-        return jsonify({"message": "contest_id and team_ids required"}), 400
+        if not contest_id or not team_ids or not isinstance(team_ids, list):
+            return jsonify({"message": "contest_id and team_ids (list) required"}), 400
 
-    cur = db.cursor()
-    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
-    user = cur.fetchone()
-    if not user:
-        return jsonify({"message": "User not found"}), 404
-    user_id = user[0]
+        cur = db.cursor()
+        cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+        user = cur.fetchone()
+        if not user:
+            return jsonify({"message": "User not found"}), 404
+        user_id = user[0]
 
-    inserted = 0
-    for team_id in team_ids:
-        cur.execute("""
-          SELECT id FROM teams
-          WHERE id = %s AND user_id = %s
-        """, (team_id, user_id))
-        if not cur.fetchone():
-            continue
+        inserted = 0
+        for team_id in team_ids:
+            # Validate team ownership
+            cur.execute("SELECT id FROM teams WHERE id = %s AND user_id = %s", (team_id, user_id))
+            if not cur.fetchone():
+                continue
 
-        # skip if already joined
-        cur.execute("""
-          SELECT id FROM entries
-          WHERE contest_id = %s AND team_id = %s
-        """, (contest_id, team_id))
-        if cur.fetchone():
-            continue
+            # Skip if already joined
+            cur.execute("SELECT id FROM entries WHERE contest_id = %s AND team_id = %s", (contest_id, team_id))
+            if cur.fetchone():
+                continue
 
-        cur.execute("""
-          INSERT INTO entries (user_id, team_id, contest_id)
-          VALUES (%s, %s, %s)
-        """, (user_id, team_id, contest_id))
-        inserted += 1
+            # Insert entry
+            cur.execute("INSERT INTO entries (user_id, team_id, contest_id) VALUES (%s, %s, %s)", (user_id, team_id, contest_id))
+            inserted += 1
 
-    db.commit()
-    return jsonify({ "message": f"{inserted} teams joined successfully." })
+        db.commit()
+        return jsonify({"message": f"{inserted} team(s) joined successfully."})
+
+    except Exception as e:
+        app.logger.exception("🛑 Failed to join contest bulk:")
+        return jsonify({"message": "Internal Server Error"}), 500
 
 
 @app.route('/match/<int:match_id>', methods=['GET'])
@@ -3102,7 +2775,9 @@ def get_match_by_id(match_id):
         else:
             return jsonify({"message": "Match not found"}), 404
     except mysql.connector.Error as err:
+        app.logger.exception("DB error in get_match_by_id")
         return jsonify({"error": str(err)}), 500
+
 
 @app.route('/contest/<int:contest_id>', methods=['GET'])
 def get_contest_by_id(contest_id):
@@ -3130,38 +2805,55 @@ def get_contest_by_id(contest_id):
         else:
             return jsonify({"message": "Contest not found"}), 404
     except mysql.connector.Error as err:
+        app.logger.exception("DB error in get_contest_by_id")
         return jsonify({"error": str(err)}), 500
 
 
 @app.route('/delete_teams', methods=['POST'])
 @token_required
 def delete_teams_bulk(current_user_email):
-    data = request.get_json() or {}
-    team_ids = data.get("team_ids")  # list of team IDs
-    if not team_ids:
-        return jsonify({"message": "team_ids required"}), 400
+    try:
+        data = request.get_json() or {}
+        team_ids = data.get("team_ids")
+        if not team_ids or not isinstance(team_ids, list):
+            return jsonify({"message": "team_ids (list) required"}), 400
 
-    cur = db.cursor()
-    cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
-    user = cur.fetchone()
-    if not user:
-        return jsonify({"message": "User not found"}), 404
-    user_id = user[0]
+        cur = db.cursor()
+        cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+        user = cur.fetchone()
+        if not user:
+            return jsonify({"message": "User not found"}), 404
+        user_id = user[0]
 
-    deleted = 0
-    for team_id in team_ids:
-        cur.execute("SELECT user_id FROM teams WHERE id=%s", (team_id,))
-        team = cur.fetchone()
-        if not team or team[0] != user_id:
-            continue
+        deleted = 0
+        for team_id in team_ids:
+            # Check ownership
+            cur.execute("SELECT user_id FROM teams WHERE id=%s", (team_id,))
+            team = cur.fetchone()
+            if not team or team[0] != user_id:
+                continue
 
-        cur.execute("DELETE FROM entries WHERE team_id=%s", (team_id,))
-        cur.execute("DELETE FROM scores WHERE entry_id IN (SELECT id FROM entries WHERE team_id=%s)", (team_id,))
-        cur.execute("DELETE FROM teams WHERE id=%s", (team_id,))
-        deleted += 1
+            # Delete entries and related scores first (to avoid FK constraint issues)
+            cur.execute("SELECT id FROM entries WHERE team_id=%s", (team_id,))
+            entry_ids = [row[0] for row in cur.fetchall()]
 
-    db.commit()
-    return jsonify({ "message": f"{deleted} teams deleted." })
+            if entry_ids:
+                format_strings = ",".join(["%s"] * len(entry_ids))
+                cur.execute(f"DELETE FROM scores WHERE entry_id IN ({format_strings})", tuple(entry_ids))
+                cur.execute(f"DELETE FROM entries WHERE id IN ({format_strings})", tuple(entry_ids))
+
+            # Then delete the team
+            cur.execute("DELETE FROM teams WHERE id=%s", (team_id,))
+            deleted += 1
+
+        db.commit()
+        return jsonify({"message": f"{deleted} team(s) deleted."})
+
+    except Exception as e:
+        app.logger.exception("Error deleting teams")
+        return jsonify({"message": "Internal Server Error"}), 500
+
+
 
 @app.route('/contest/<int:contest_id>/user-teams', methods=['GET', 'OPTIONS'])
 @token_required
@@ -3206,31 +2898,29 @@ def get_user_teams_for_contest(current_user_email, contest_id):
         return jsonify({"message": "Internal Server Error"}), 500
 
 
-
 @app.route('/my_contest/<int:user_id>/<int:contest_id>', methods=['GET'])
 def get_my_contest(user_id, contest_id):
     try:
         cursor = db.cursor(dictionary=True)
         query = """
             SELECT  c.id,
-        c.contest_name,
-        c.entry_fee,
-        c.prize_pool,
-        c.joined_users,
-        c.max_users,
-        m.start_time,
-        m.end_time,
-        CASE
-            WHEN NOW() < m.start_time THEN 'UPCOMING'
-            WHEN NOW() BETWEEN m.start_time AND m.end_time THEN 'LIVE'
-            ELSE 'COMPLETED'
-        END AS status
-FROM contests c
-JOIN matches m ON m.id = c.match_id
-WHERE c.id = %s
-
+                    c.contest_name,
+                    c.entry_fee,
+                    c.prize_pool,
+                    c.joined_users,
+                    c.max_users,
+                    m.start_time,
+                    m.end_time,
+                    CASE
+                        WHEN NOW() < m.start_time THEN 'UPCOMING'
+                        WHEN NOW() BETWEEN m.start_time AND m.end_time THEN 'LIVE'
+                        ELSE 'COMPLETED'
+                    END AS status
+            FROM contests c
+            JOIN matches m ON m.id = c.match_id
+            WHERE c.id = %s
         """
-        cursor.execute(query, (user_id, contest_id))
+        cursor.execute(query, (contest_id,))  # Only contest_id here
         contest = cursor.fetchone()
         if contest:
             return jsonify(contest), 200
@@ -3244,40 +2934,39 @@ WHERE c.id = %s
 @app.route('/api/my-contest-entries/<int:user_id>/<int:contest_id>', methods=['GET'])
 def get_my_contest_entries(user_id, contest_id):
     try:
-        cursor = db.cursor(dictionary=True)
+        with mysql_cursor(dictionary=True) as cursor:
+            # 1) Fetch each joined team entry
+            entries_sql = """
+                SELECT
+                    ce.team_id,
+                    ce.entry_fee,
+                    ce.joined_count
+                FROM contest_entries ce
+                WHERE ce.user_id    = %s
+                  AND ce.contest_id = %s
+            """
+            cursor.execute(entries_sql, (user_id, contest_id))
+            joined_teams = cursor.fetchall()  # [{team_id, entry_fee, joined_count}, …]
 
-        # 1) Fetch each joined team entry
-        entries_sql = """
-            SELECT
-                ce.team_id,
-                ce.entry_fee,
-                ce.joined_count
-            FROM contest_entries ce
-            WHERE ce.user_id    = %s
-              AND ce.contest_id = %s
-        """
-        cursor.execute(entries_sql, (user_id, contest_id))
-        joined_teams = cursor.fetchall()  # [{team_id, entry_fee, joined_count}, …]
+            # 2) Compute total bet money in the DB for accuracy
+            total_sql = """
+                SELECT IFNULL(SUM(entry_fee * joined_count), 0) AS total_bet_money
+                FROM contest_entries
+                WHERE user_id    = %s
+                  AND contest_id = %s
+            """
+            cursor.execute(total_sql, (user_id, contest_id))
+            total_bet_money = cursor.fetchone().get('total_bet_money', 0)
 
-        # 2) Compute total bet money in the DB for accuracy
-        total_sql = """
-            SELECT IFNULL(SUM(entry_fee * joined_count), 0) AS total_bet_money
-            FROM contest_entries
-            WHERE user_id    = %s
-              AND contest_id = %s
-        """
-        cursor.execute(total_sql, (user_id, contest_id))
-        total_bet_money = cursor.fetchone().get('total_bet_money', 0)
-
-        # 3) (Optional) Fetch contest-level entry_fee if you need it on the front end
-        contest_sql = """
-            SELECT entry_fee
-            FROM contests
-            WHERE id = %s
-        """
-        cursor.execute(contest_sql, (contest_id,))
-        contest = cursor.fetchone()
-        contest_entry_fee = contest.get('entry_fee', 0) if contest else 0
+            # 3) (Optional) Fetch contest-level entry_fee if you need it on the front end
+            contest_sql = """
+                SELECT entry_fee
+                FROM contests
+                WHERE id = %s
+            """
+            cursor.execute(contest_sql, (contest_id,))
+            contest = cursor.fetchone()
+            contest_entry_fee = contest.get('entry_fee', 0) if contest else 0
 
         return jsonify({
             "joinedTeams": joined_teams,
@@ -3300,7 +2989,7 @@ def get_match_players_with_stats(current_user_email, match_id):
     """
     import re
     contest_id = request.args.get('contest_id', type=int)
-    cur = mysql.connection.cursor(dictionary=True)
+    cur = db.cursor(dictionary=True)  # changed from mysql.connection.cursor
 
     # a) fetch match_name
     cur.execute("SELECT match_name FROM matches WHERE id = %s", (match_id,))
@@ -3367,16 +3056,15 @@ def get_match_players_with_stats(current_user_email, match_id):
 @token_required
 def get_players_for_ai_page(current_user_email, match_id, contest_id):
     try:
-        cur = db.cursor(dictionary=True)  # or mysql.connection.cursor(dictionary=True) based on your setup
+        with mysql_cursor(dictionary=True) as cur:
+            cur.execute("""
+                SELECT id, player_name, role, team_name, credit_value, is_playing, position
+                FROM players
+                WHERE match_id = %s
+            """, (match_id,))
 
-        cur.execute("""
-            SELECT id, player_name, role, team_name, credit_value, is_playing, position
-            FROM players
-            WHERE match_id = %s
-        """, (match_id,))
-
-        players = cur.fetchall()
-        return jsonify(players), 200
+            players = cur.fetchall()
+            return jsonify(players), 200
 
     except Exception as e:
         import traceback
@@ -3386,42 +3074,12 @@ def get_players_for_ai_page(current_user_email, match_id, contest_id):
 
 
 
-# 🧠 Add this helper function anywhere near your routes
-def pick_team(match_id):
-    try:
-        cursor = conn.cursor(dictionary=True)
-
-        cursor.execute("""
-            SELECT * FROM players
-            WHERE match_id = %s
-            ORDER BY RAND()
-            LIMIT 11
-        """, (match_id,))
-        players = cursor.fetchall()
-
-        if len(players) != 11:
-            return None
-
-        # Randomly assign captain/vice
-        captain_index = random.randint(0, 10)
-        vice_captain_index = (captain_index + 1) % 11
-
-        for i, player in enumerate(players):
-            player['is_captain'] = (i == captain_index)
-            player['is_vice_captain'] = (i == vice_captain_index)
-            player['player_id'] = player['id']  # Ensure compatibility
-
-        return players
-
-    except Exception as e:
-        print(f"Error in pick_team(): {e}")
-        return None
-
 
 
 @celery.task()
 def generate_ai_teams_task(match_id, contest_id, user_id, count):
     created = 0
+
     for i in range(count):
         try:
             team = pick_team(match_id)
@@ -3432,22 +3090,24 @@ def generate_ai_teams_task(match_id, contest_id, user_id, count):
             captain = next((p['player_name'] for p in team if p.get('is_captain')), None)
             vice_captain = next((p['player_name'] for p in team if p.get('is_vice_captain')), None)
 
-            insert_query = """
-                INSERT INTO teams (team_name, players, user_id, contest_id, total_points, captain, vice_captain)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """
-            cursor = conn.cursor()
-            cursor.execute(insert_query, (
-                f"AI Team {i+1}",
-                json.dumps(team),
-                user_id,
-                contest_id,
-                0,
-                captain,
-                vice_captain
-            ))
-            conn.commit()
+            with mysql_cursor() as cursor:
+                insert_query = """
+                    INSERT INTO teams (team_name, players, user_id, contest_id, total_points, captain, vice_captain)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """
+                cursor.execute(insert_query, (
+                    f"AI Team {i+1}",
+                    json.dumps(team),
+                    user_id,
+                    contest_id,
+                    0,
+                    captain,
+                    vice_captain
+                ))
+                db.commit()  # Assuming db is your MySQL connection object
+
             created += 1
+
         except Exception as e:
             print(f"[ERROR] Failed to create team {i+1}: {e}")
             traceback.print_exc()
