@@ -3458,9 +3458,8 @@ def trigger_ai_team_generation():
     return jsonify({"task_id": task.id, "status": "queued"}), 202
 
 
-
-@app.route('/generate_ai_teams', methods=['POST'])
-def trigger_ai_team_generation():
+@app.route('/api/ai/generate_sync', methods=['POST'])
+def trigger_ai_team_generation_sync():
     try:
         data = request.get_json()
         match_id = data.get('match_id')
