@@ -64,14 +64,17 @@ print("✅ SECRET_KEY loaded:", app.config['SECRET_KEY'])
 
 # ─── DATABASE CONNECTION SETUP ─────────────────────────────────────────────────
 # Connect to MySQL using credentials from .env file
-def get_db_connection():
-    return mysql.connector.connect(
-        host=os.getenv('DB_HOST'),
-        port=int(os.getenv('DB_PORT', 3306)),
-        user=os.getenv('DB_USER'),
-        password=os.getenv('DB_PASSWORD'),
-        database=os.getenv('DB_NAME')
-    )
+# Connect to MySQL using credentials from .env file
+db = mysql.connector.connect(
+    host=os.getenv('DB_HOST'),
+    port=int(os.getenv('DB_PORT', 3306)),
+    user=os.getenv('DB_USER'),
+    password=os.getenv('DB_PASSWORD'),
+    database=os.getenv('DB_NAME')
+)
+
+# Create a global cursor (you may replace this with a per-request cursor if needed)
+cursor = db.cursor()
 
 # ─── JWT TOKEN PROTECTION DECORATOR ────────────────────────────────────────────
 def token_required(f):
