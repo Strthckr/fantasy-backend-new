@@ -139,36 +139,45 @@ print("🔔 /login route is registered")
 # Login API
 @app.route('/login', methods=['POST'])
 def login():
-    data = request.get_json()
-    email    = data.get('email')
-    password = data.get('password')
+    try:
+        data = request.get_json()
+        email    = data.get('email')
+        password = data.get('password')
 
-    # use dict cursor so we can return id + email
-    cursor = db.cursor(dictionary=True)
-    cursor.execute("SELECT id, email, password FROM users WHERE email = %s", (email,))
-    user = cursor.fetchone()
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
 
-    if not user:
-        return jsonify({"message": "User not found"}), 404
+        cursor.execute("SELECT id, email, password FROM users WHERE email = %s", (email,))
+        user = cursor.fetchone()
 
-    stored_hash = user["password"]
-    if not bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8")):
-        return jsonify({"message": "Invalid credentials"}), 401
+        cursor.close()
+        conn.close()
 
-    token = jwt.encode(
-        {"email": email, "exp": datetime.utcnow() + timedelta(days=7)},
-        app.config["SECRET_KEY"],
-        algorithm="HS256",
-    )
-    if isinstance(token, bytes):
-        token = token.decode("utf-8")
+        if not user:
+            return jsonify({"message": "User not found"}), 404
 
-    # 👇 NEW: also return id & email
-    return jsonify({
-        "token": token,
-        "id":    user["id"],
-        "email": user["email"]
-    }), 200
+        stored_hash = user["password"]
+        if not bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8")):
+            return jsonify({"message": "Invalid credentials"}), 401
+
+        token = jwt.encode(
+            {"email": email, "exp": datetime.utcnow() + timedelta(days=7)},
+            app.config["SECRET_KEY"],
+            algorithm="HS256",
+        )
+        if isinstance(token, bytes):
+            token = token.decode("utf-8")
+
+        return jsonify({
+            "token": token,
+            "id":    user["id"],
+            "email": user["email"]
+        }), 200
+
+    except Exception as e:
+        print(f"[ERROR] Login failed: {e}")
+        traceback.print_exc()
+        return jsonify({'error': 'Internal Server Error'}), 500
 
 
 
