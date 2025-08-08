@@ -929,30 +929,6 @@ def declare_winner_api(current_user_email):
 
 
 
-@app.route('/transactions', methods=['GET'])
-@token_required
-def get_transactions(current_user_email):
-    try:
-        with mysql_cursor(dictionary=True) as cursor:
-            cursor.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-            user = cursor.fetchone()
-            if not user:
-                return jsonify({"message": "User not found"}), 404
-
-            user_id = user['id']
-
-            cursor.execute("""
-                SELECT amount, type, description, created_at
-                FROM transactions
-                WHERE user_id = %s
-                ORDER BY created_at DESC
-            """, (user_id,))
-            transactions = cursor.fetchall()
-
-        return jsonify({"transactions": transactions})
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
 
 from decimal import Decimal
 
