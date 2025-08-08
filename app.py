@@ -3475,13 +3475,35 @@ def trigger_ai_team_generation():
         user_id = data.get('user_id')
         count = data.get('count', 1)
 
-        task = generate_ai_teams_task.delay(match_id, contest_id, user_id, count)
+        if not all([match_id, contest_id, user_id]):
+            return jsonify({'error': 'Missing parameters'}), 400
 
-        return jsonify({"task_id": task.id, "status": "queued"})
+        task = generate_ai_teams_task.apply_async(args=[match_id, contest_id, user_id, count])
+
+        return jsonify({'message': 'AI team generation started.', 'task_id': task.id}), 202
 
     except Exception as e:
-        print("[ERROR]", e)
-        return jsonify({"error": str(e)}), 500
+        print(f"[ERROR] Failed to trigger task: {e}")
+        traceback.print_exc()
+        return jsonify({'error': 'Internal Server Error'}), 500
+
+
+@app.route('/generate_ai_teams/status', methods=['GET'])
+def check_ai_team_status():
+    task_id = request.args.get('task_id')
+    if not task_id:
+        return jsonify({'error': 'Missing task_id'}), 400
+
+    task = generate_ai_teams_task.AsyncResult(task_id)
+
+    response = {
+        'task_id': task_id,
+        'status': task.status,
+        'result': task.result if task.ready() else None
+    }
+
+    return jsonify(response), 200
+
 
 
 @app.route('/test_env')
