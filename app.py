@@ -12,6 +12,8 @@ import os
 import bcrypt
 import traceback
 import re
+from celery import Celery
+
 
 
 # ─── LOAD ENVIRONMENT VARIABLES ────────────────────────────────────────────────
@@ -30,6 +32,20 @@ app = Flask(__name__)
 
 # CORS setup: Allow frontend on localhost:3000 to access this backend
 CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
+
+# ─── CELERY SETUP ──────────────────────────────────────────────────────────────
+# ─── CELERY SETUP ──────────────────────────────────────────────────────────────
+def make_celery(app):
+    celery = Celery(
+        app.import_name,
+        broker='redis://localhost:6379/0',
+        backend='redis://localhost:6379/0'
+    )
+    celery.conf.update(app.config)
+    return celery
+
+celery = make_celery(app)
+
 
 @app.before_request
 def handle_preflight():
@@ -3357,6 +3373,92 @@ def get_players_for_ai_page(current_user_email, match_id, contest_id):
         return jsonify({"message": "Internal Server Error"}), 500
 
 
+
+# 🧠 Add this helper function anywhere near your routes
+def pick_team(match_id):
+    try:
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT * FROM players
+            WHERE match_id = %s
+            ORDER BY RAND()
+            LIMIT 11
+        """, (match_id,))
+        players = cursor.fetchall()
+
+        if len(players) != 11:
+            return None
+
+        # Randomly assign captain/vice
+        captain_index = random.randint(0, 10)
+        vice_captain_index = (captain_index + 1) % 11
+
+        for i, player in enumerate(players):
+            player['is_captain'] = (i == captain_index)
+            player['is_vice_captain'] = (i == vice_captain_index)
+            player['player_id'] = player['id']  # Ensure compatibility
+
+        return players
+
+    except Exception as e:
+        print(f"Error in pick_team(): {e}")
+        return None
+
+
+
+@celery.task()
+def generate_ai_teams_task(match_id, contest_id, user_id, count):
+    created = 0
+    for i in range(count):
+        try:
+            team = pick_team(match_id)  # ✅ This should already be defined in app.py
+
+            if not team or len(team) != 11:
+                continue
+
+            captain = next((p['player_name'] for p in team if p.get('is_captain')), None)
+            vice_captain = next((p['player_name'] for p in team if p.get('is_vice_captain')), None)
+
+            insert_query = """
+                INSERT INTO teams (team_name, players, user_id, contest_id, total_points, captain, vice_captain)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """
+
+            cursor = conn.cursor()  # ✅ assuming `conn` is defined globally at the top
+            cursor.execute(insert_query, (
+                f"AI Team {i+1}",
+                json.dumps(team),
+                user_id,
+                contest_id,
+                0,
+                captain,
+                vice_captain
+            ))
+            conn.commit()
+            created += 1
+
+        except Exception as e:
+            print(f"[ERROR] Failed to create team {i+1}: {e}")
+            traceback.print_exc()
+            continue
+
+    return {"message": f"{created} teams created successfully."}
+
+
+@app.route('/api/ai/generate', methods=['POST'])
+def trigger_ai_team_generation():
+    data = request.json
+    match_id = data.get('match_id')
+    contest_id = data.get('contest_id')
+    user_id = data.get('user_id')
+    count = data.get('count', 1)
+
+    if not all([match_id, contest_id, user_id]):
+        return jsonify({"error": "Missing required fields"}), 400
+
+    task = generate_ai_teams_task.delay(match_id, contest_id, user_id, count)
+    return jsonify({"task_id": task.id, "status": "queued"}), 202
 
 
 
