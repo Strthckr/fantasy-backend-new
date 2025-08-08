@@ -3466,6 +3466,28 @@ def trigger_ai_team_generation():
 
 
 
+@app.route('/generate_ai_teams', methods=['POST'])
+def trigger_ai_team_generation():
+    try:
+        data = request.get_json()
+        match_id = data['match_id']
+        contest_id = data['contest_id']
+        user_id = data['user_id']
+        count = int(data.get('count', 1))
+
+        # Trigger Celery task
+        task = generate_ai_teams_task.delay(match_id, contest_id, user_id, count)
+
+        return jsonify({
+            "message": f"AI team generation started for {count} teams.",
+            "task_id": task.id
+        }), 202
+
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 
 
 
