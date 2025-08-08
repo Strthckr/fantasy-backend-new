@@ -928,24 +928,6 @@ def declare_winner_api(current_user_email):
 
 
 
-@app.route('/wallet', methods=['GET'])
-@token_required
-def wallet(current_user_email):
-    try:
-        with mysql_cursor(dictionary=True) as cursor:
-            cursor.execute("""
-                SELECT w.balance FROM wallets w
-                JOIN users u ON w.user_id = u.id
-                WHERE u.email = %s
-            """, (current_user_email,))
-            wallet = cursor.fetchone()
-            if wallet:
-                return jsonify({"balance": wallet['balance']})
-            else:
-                return jsonify({"message": "Wallet not found"}), 404
-    except mysql.connector.Error as err:
-        return jsonify({"error": str(err)}), 500
-
 
 @app.route('/transactions', methods=['GET'])
 @token_required
