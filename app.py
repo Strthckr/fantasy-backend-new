@@ -13,6 +13,7 @@ import bcrypt
 import traceback
 import re
 from celery import Celery
+from contextlib import contextmanager
 
 
 
@@ -64,16 +65,28 @@ print("✅ SECRET_KEY loaded:", app.config['SECRET_KEY'])
 
 # ─── DATABASE CONNECTION SETUP ─────────────────────────────────────────────────
 # Connect to MySQL using credentials from .env file
-db = mysql.connector.connect(
-    host=os.getenv('DB_HOST'),
-    port=int(os.getenv('DB_PORT', 3306)),
-    user=os.getenv('DB_USER'),
-    password=os.getenv('DB_PASSWORD'),
-    database=os.getenv('DB_NAME')
-)
+# ─── DATABASE CONNECTION SETUP ────────────────────────────────────────────────
 
-# Create a global cursor (you may replace this with a per-request cursor if needed)
-cursor = db.cursor()
+def get_db_connection():
+    return mysql.connector.connect(
+        host=os.getenv('DB_HOST'),
+        port=int(os.getenv('DB_PORT', 3306)),
+        user=os.getenv('DB_USER'),
+        password=os.getenv('DB_PASSWORD'),
+        database=os.getenv('DB_NAME')
+    )
+
+@contextmanager
+def mysql_cursor(dictionary=False):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=dictionary)
+    try:
+        yield cursor
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
 
 
 # ─── JWT TOKEN PROTECTION DECORATOR ────────────────────────────────────────────
@@ -146,10 +159,9 @@ def login():
     email    = data.get('email')
     password = data.get('password')
 
-    # use dict cursor so we can return id + email
-    cursor = db.cursor(dictionary=True)
-    cursor.execute("SELECT id, email, password FROM users WHERE email = %s", (email,))
-    user = cursor.fetchone()
+    with mysql_cursor(dictionary=True) as cursor:
+        cursor.execute("SELECT id, email, password FROM users WHERE email = %s", (email,))
+        user = cursor.fetchone()
 
     if not user:
         return jsonify({"message": "User not found"}), 404
@@ -166,7 +178,6 @@ def login():
     if isinstance(token, bytes):
         token = token.decode("utf-8")
 
-    # 👇 NEW: also return id & email
     return jsonify({
         "token": token,
         "id":    user["id"],
