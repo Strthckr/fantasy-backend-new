@@ -65,6 +65,12 @@ print("✅ SECRET_KEY loaded:", app.config['SECRET_KEY'])
 # ─── DATABASE CONNECTION SETUP ─────────────────────────────────────────────────
 # Connect to MySQL using credentials from .env file
 def get_db_connection():
+    print("Connecting to DB with:")
+    print("Host:", os.getenv('DB_HOST'))
+    print("Port:", os.getenv('DB_PORT'))
+    print("User:", os.getenv('DB_USER'))
+    print("Database:", os.getenv('DB_NAME'))
+
     return mysql.connector.connect(
         host=os.getenv('DB_HOST'),
         port=int(os.getenv('DB_PORT', 3306)),
