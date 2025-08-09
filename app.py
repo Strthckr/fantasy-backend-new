@@ -2818,14 +2818,36 @@ def get_match_players_with_stats(current_user_email, match_id):
 @app.route('/api/matches/<int:match_id>/contest/<int:contest_id>/players', methods=['GET'])
 @token_required
 def get_players_for_ai_page(current_user_email, match_id, contest_id):
+    import re
     try:
         with mysql_cursor(dictionary=True) as cur:
-            cur.execute("""
-                SELECT id, player_name, role, team_name, credit_value, is_playing, position
-                FROM players
-                WHERE match_id = %s
-            """, (match_id,))
+            # 1) Get match_name
+            cur.execute("SELECT match_name FROM matches WHERE id = %s", (match_id,))
+            match = cur.fetchone()
+            if not match:
+                return jsonify({'error': 'Match not found'}), 404
 
+            # 2) Try parsing team names
+            sides = [s.strip() for s in re.split(r'[^A-Za-z ]+', match['match_name']) if s.strip()]
+
+            if len(sides) == 2:
+                sql = """
+                    SELECT id, player_name, role, team_name, credit_value, is_playing, position
+                    FROM players
+                    WHERE team_name IN (%s, %s)
+                    ORDER BY is_playing DESC, position ASC
+                """
+                params = (sides[0], sides[1])
+            else:
+                sql = """
+                    SELECT id, player_name, role, team_name, credit_value, is_playing, position
+                    FROM players
+                    WHERE match_id = %s
+                    ORDER BY is_playing DESC, position ASC
+                """
+                params = (match_id,)
+
+            cur.execute(sql, params)
             players = cur.fetchall()
             return jsonify(players), 200
 
