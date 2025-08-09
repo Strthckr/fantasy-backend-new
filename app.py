@@ -1866,9 +1866,10 @@ def prize_distributions(current_user_email):
 
 
 # 2. Dashboard (upcomingMatches + user wallet)
-#from datetime import datetime, timedelta
-#from flask import jsonify, request
-#import mysql.connector
+from datetime import datetime, timedelta
+from flask import jsonify, request
+import mysql.connector
+
 @app.route('/user/dashboard', methods=['GET'])
 @token_required
 def user_dashboard(current_user_email):
@@ -1876,133 +1877,137 @@ def user_dashboard(current_user_email):
         days = int(request.args.get('range', 7))
         since = datetime.utcnow() - timedelta(days=days)
 
-        with db.cursor(dictionary=True) as cur:
-            # 1) Get user_id
-            cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
-            user = cur.fetchone()
-            if not user:
-                return jsonify({"message": "User not found"}), 404
-            uid = user['id']
+        conn = get_db_connection()
+        try:
+            with conn.cursor(dictionary=True) as cur:
+                # 1) Get user_id
+                cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+                user = cur.fetchone()
+                if not user:
+                    return jsonify({"message": "User not found"}), 404
+                uid = user['id']
 
-            # 2) Wallet balance
-            cur.execute("SELECT balance FROM wallets WHERE user_id=%s", (uid,))
-            row = cur.fetchone()
-            wallet = float(row['balance'] or 0) if row else 0
+                # 2) Wallet balance
+                cur.execute("SELECT balance FROM wallets WHERE user_id=%s", (uid,))
+                row = cur.fetchone()
+                wallet = float(row['balance'] or 0) if row else 0
 
-            # 3) Earnings & spend & net in range
-            cur.execute("""
-                SELECT 
-                    SUM(CASE WHEN t.type='credit' THEN t.amount ELSE 0 END) AS earnings,
-                    SUM(CASE WHEN t.type='debit'  THEN t.amount ELSE 0 END) AS spend
-                FROM transactions t
-                WHERE t.user_id=%s AND t.created_at >= %s
-            """, (uid, since))
-            stats = cur.fetchone()
-            total_earnings = float(stats['earnings'] or 0)
-            total_spend = float(stats['spend'] or 0)
-            net_balance = total_earnings - total_spend
+                # 3) Earnings & spend & net in range
+                cur.execute("""
+                    SELECT 
+                        SUM(CASE WHEN t.type='credit' THEN t.amount ELSE 0 END) AS earnings,
+                        SUM(CASE WHEN t.type='debit'  THEN t.amount ELSE 0 END) AS spend
+                    FROM transactions t
+                    WHERE t.user_id=%s AND t.created_at >= %s
+                """, (uid, since))
+                stats = cur.fetchone()
+                total_earnings = float(stats['earnings'] or 0)
+                total_spend = float(stats['spend'] or 0)
+                net_balance = total_earnings - total_spend
 
-            # 4) Daily net history
-            cur.execute("""
-                SELECT 
-                    DATE(t.created_at) AS day,
-                    SUM(CASE WHEN t.type='credit' THEN t.amount ELSE -t.amount END) AS net
-                FROM transactions t
-                WHERE t.user_id=%s AND t.created_at >= %s
-                GROUP BY day
-                ORDER BY day
-            """, (uid, since))
-            dailyNetHistory = [
-                {"day": r["day"].isoformat(), "net": float(r["net"])}
-                for r in cur.fetchall()
-            ]
+                # 4) Daily net history
+                cur.execute("""
+                    SELECT 
+                        DATE(t.created_at) AS day,
+                        SUM(CASE WHEN t.type='credit' THEN t.amount ELSE -t.amount END) AS net
+                    FROM transactions t
+                    WHERE t.user_id=%s AND t.created_at >= %s
+                    GROUP BY day
+                    ORDER BY day
+                """, (uid, since))
+                dailyNetHistory = [
+                    {"day": r["day"].isoformat(), "net": float(r["net"])}
+                    for r in cur.fetchall()
+                ]
 
-            # 5) Active contests
-            cur.execute("""
-                SELECT 
-                    uc.id AS entry_id,
-                    c.id AS contest_id,
-                    c.contest_name,
-                    c.prize_pool
-                FROM user_contests uc
-                JOIN contests c ON uc.contest_id = c.id
-                JOIN matches m ON c.match_id = m.id
-                WHERE uc.user_id=%s 
-                  AND UPPER(m.status) IN ('UPCOMING','LIVE')
-            """, (uid,))
-            activeContests = [
-                {
-                    "entry_id": r["entry_id"],
-                    "contest_id": r["contest_id"],
-                    "contest_name": r["contest_name"],
-                    "prize_pool": float(r["prize_pool"])
-                }
-                for r in cur.fetchall()
-            ]
-
-            # 6) Upcoming matches + contests
-            cur.execute("""
-                SELECT
-                    m.id AS match_id,
-                    m.match_name,
-                    m.start_time,
-                    c.id AS contest_id,
-                    c.contest_name,
-                    c.prize_pool,
-                    IFNULL(c.joined_users, 0) AS joined_users,
-                    IFNULL(c.max_users, 0) AS max_users 
-                FROM matches m
-                JOIN contests c ON c.match_id = m.id
-                WHERE UPPER(m.status) = 'UPCOMING'
-                ORDER BY m.start_time, c.prize_pool DESC
-            """)
-            rows = cur.fetchall()
-            matches = {}
-            for r in rows:
-                mid = r["match_id"]
-                if mid not in matches:
-                    matches[mid] = {
-                        "id": mid,
-                        "match_name": r["match_name"],
-                        "start_time": r["start_time"].isoformat(),
-                        "contests": []
+                # 5) Active contests
+                cur.execute("""
+                    SELECT 
+                        uc.id AS entry_id,
+                        c.id AS contest_id,
+                        c.contest_name,
+                        c.prize_pool
+                    FROM user_contests uc
+                    JOIN contests c ON uc.contest_id = c.id
+                    JOIN matches m ON c.match_id = m.id
+                    WHERE uc.user_id=%s 
+                      AND UPPER(m.status) IN ('UPCOMING','LIVE')
+                """, (uid,))
+                activeContests = [
+                    {
+                        "entry_id": r["entry_id"],
+                        "contest_id": r["contest_id"],
+                        "contest_name": r["contest_name"],
+                        "prize_pool": float(r["prize_pool"])
                     }
-                matches[mid]["contests"].append({
-                    "contest_id": r["contest_id"],
-                    "contest_name": r["contest_name"],
-                    "prize_pool": float(r["prize_pool"]),
-                    "entries": int(r["joined_users"] or 0),
-                    "max_entries": int(r["max_users"] or 0)
-                })
+                    for r in cur.fetchall()
+                ]
 
-            # 7) User teams for upcoming matches
-            cur.execute("""
-                SELECT 
-                    t.id AS team_id,
-                    t.team_name,
-                    t.contest_id,
-                    t.total_points,
-                    t.players,
-                    m.id AS match_id,
-                    m.match_name
-                FROM teams t
-                JOIN contests c ON t.contest_id = c.id
-                JOIN matches m ON c.match_id = m.id
-                WHERE t.user_id = %s
-                  AND UPPER(m.status) = 'UPCOMING'
-            """, (uid,))
-            userTeams = [
-                {
-                    "team_id": r["team_id"],
-                    "team_name": r["team_name"],
-                    "match_id": r["match_id"],
-                    "match_name": r["match_name"],
-                    "contest_id": r["contest_id"],
-                    "total_points": r["total_points"],
-                    "players": r["players"]
-                }
-                for r in cur.fetchall()
-            ]
+                # 6) Upcoming matches + contests
+                cur.execute("""
+                    SELECT
+                        m.id AS match_id,
+                        m.match_name,
+                        m.start_time,
+                        c.id AS contest_id,
+                        c.contest_name,
+                        c.prize_pool,
+                        IFNULL(c.joined_users, 0) AS joined_users,
+                        IFNULL(c.max_users, 0) AS max_users 
+                    FROM matches m
+                    JOIN contests c ON c.match_id = m.id
+                    WHERE UPPER(m.status) = 'UPCOMING'
+                    ORDER BY m.start_time, c.prize_pool DESC
+                """)
+                rows = cur.fetchall()
+                matches = {}
+                for r in rows:
+                    mid = r["match_id"]
+                    if mid not in matches:
+                        matches[mid] = {
+                            "id": mid,
+                            "match_name": r["match_name"],
+                            "start_time": r["start_time"].isoformat(),
+                            "contests": []
+                        }
+                    matches[mid]["contests"].append({
+                        "contest_id": r["contest_id"],
+                        "contest_name": r["contest_name"],
+                        "prize_pool": float(r["prize_pool"]),
+                        "entries": int(r["joined_users"] or 0),
+                        "max_entries": int(r["max_users"] or 0)
+                    })
+
+                # 7) User teams for upcoming matches
+                cur.execute("""
+                    SELECT 
+                        t.id AS team_id,
+                        t.team_name,
+                        t.contest_id,
+                        t.total_points,
+                        t.players,
+                        m.id AS match_id,
+                        m.match_name
+                    FROM teams t
+                    JOIN contests c ON t.contest_id = c.id
+                    JOIN matches m ON c.match_id = m.id
+                    WHERE t.user_id = %s
+                      AND UPPER(m.status) = 'UPCOMING'
+                """, (uid,))
+                userTeams = [
+                    {
+                        "team_id": r["team_id"],
+                        "team_name": r["team_name"],
+                        "match_id": r["match_id"],
+                        "match_name": r["match_name"],
+                        "contest_id": r["contest_id"],
+                        "total_points": r["total_points"],
+                        "players": r["players"]
+                    }
+                    for r in cur.fetchall()
+                ]
+        finally:
+            conn.close()
 
         return jsonify({
             "wallet_balance": wallet,
