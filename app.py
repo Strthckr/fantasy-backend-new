@@ -5,6 +5,7 @@ import jwt
 from functools import wraps
 from flask import Flask, request, jsonify, make_response
 import mysql.connector
+from flask_mysqldb import MySQL
 import json
 from decimal import Decimal
 from dotenv import load_dotenv
@@ -14,6 +15,8 @@ import traceback
 import re
 from celery import Celery
 from contextlib import contextmanager
+import random
+
 
 
 
@@ -30,6 +33,7 @@ print("✅ SECRET_KEY:", os.getenv("SECRET_KEY"))
 
 # ─── FLASK APP INITIALIZATION ──────────────────────────────────────────────────
 app = Flask(__name__)
+db = MySQL(app)
 
 # CORS setup: Allow frontend on localhost:3000 to access this backend
 CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
@@ -75,6 +79,7 @@ def get_db_connection():
         password=os.getenv('DB_PASSWORD'),
         database=os.getenv('DB_NAME')
     )
+    db = MySQL(app)
 
 @contextmanager
 def mysql_cursor(dictionary=False):
