@@ -2827,17 +2827,17 @@ def get_players_for_ai_page(current_user_email, match_id, contest_id):
             if not match:
                 return jsonify({'error': 'Match not found'}), 404
 
-            # 2) Try parsing team names
-            sides = [s.strip() for s in re.split(r'[^A-Za-z ]+', match['match_name']) if s.strip()]
+            # 2) Parse team names correctly ("vs" only)
+            sides = [s.strip() for s in re.split(r'\s+vs\s+', match['match_name'], flags=re.IGNORECASE) if s.strip()]
 
             if len(sides) == 2:
                 sql = """
                     SELECT id, player_name, role, team_name, credit_value, is_playing, position
                     FROM players
-                    WHERE team_name IN (%s, %s)
+                    WHERE team_name IN (%s, %s) AND match_id = %s
                     ORDER BY is_playing DESC, position ASC
                 """
-                params = (sides[0], sides[1])
+                params = (sides[0], sides[1], match_id)
             else:
                 sql = """
                     SELECT id, player_name, role, team_name, credit_value, is_playing, position
@@ -2849,7 +2849,7 @@ def get_players_for_ai_page(current_user_email, match_id, contest_id):
 
             cur.execute(sql, params)
             players = cur.fetchall()
-            return jsonify(players), 200
+            return jsonify({"players": players}), 200
 
     except Exception as e:
         import traceback
