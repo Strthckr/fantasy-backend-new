@@ -37,7 +37,7 @@ print("✅ SECRET_KEY:", os.getenv("SECRET_KEY"))
 # ─── FLASK APP INITIALIZATION ──────────────────────────────────────────────────
 app = Flask(__name__)
 db = MySQL(app)
-app.register_blueprint(ai_bp)
+
 
 # CORS setup: Allow frontend on localhost:3000 to access this backend
 CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
@@ -65,6 +65,8 @@ def handle_preflight():
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
         response.status_code = 200
         return response
+    
+    app.register_blueprint(ai_bp)
 
 
 # Load secret key into Flask config from .env (used for JWT)
