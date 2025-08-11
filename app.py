@@ -5,6 +5,7 @@ import jwt
 from functools import wraps
 from flask import Flask, request, jsonify, make_response
 import mysql.connector
+from flask_mysqldb import MySQL
 import json
 from decimal import Decimal
 from dotenv import load_dotenv
@@ -34,6 +35,7 @@ print("✅ SECRET_KEY:", os.getenv("SECRET_KEY"))
 
 # ─── FLASK APP INITIALIZATION ──────────────────────────────────────────────────
 app = Flask(__name__)
+db = MySQL(app)
 
 
 # CORS setup: Allow frontend on localhost:3000 to access this backend
@@ -81,12 +83,12 @@ def get_db_connection():
         password=os.getenv('DB_PASSWORD'),
         database=os.getenv('DB_NAME')
     )
+    db = MySQL(app)
 
 
 from ai_team import ai_bp
 app.register_blueprint(ai_bp)
 
-@contextmanager
 @contextmanager
 def mysql_cursor(dictionary=False):
     conn = get_db_connection()
@@ -94,16 +96,9 @@ def mysql_cursor(dictionary=False):
     try:
         yield cursor
         conn.commit()
-    except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        raise
     finally:
         cursor.close()
         conn.close()
-
 
 
 # 🧠 Updated: pick_team using context-managed MySQL connection
@@ -291,7 +286,7 @@ def create_team(current_user_email):
             return jsonify({"message": "team_name, 11 players & contest_id required"}), 400
 
         # user ID lookup
-        with mysql_cursor(dictionary=False) as cur:
+        cur = db.cursor()
         cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
         row = cur.fetchone()
         if not row:
@@ -340,6 +335,7 @@ def create_team(current_user_email):
                 (team_name, players, user_id, contest_id)
             VALUES (%s, %s, %s, %s)
         """, (team_name, json.dumps(players), user_id, contest_id))
+        db.commit()
 
         return jsonify({"message": "Team created ✔"}), 200
 
@@ -423,6 +419,7 @@ def join_contest_by_url(current_user_email, contest_id):
         (user_id, entry_fee)
     )
 
+    db.commit()
     return jsonify({"message": f"Joined! ₹{entry_fee} deducted."}), 200
 
 # # Create Contest API
@@ -458,6 +455,7 @@ def join_contest_by_url(current_user_email, contest_id):
 #         """, (contest_name, match_id, entry_fee, prize_pool,
 #               max_teams_per_user, commission_percentage, total_spots))
 
+#         db.commit()
 #         return jsonify({"message": "Contest created successfully!"})
 #     except mysql.connector.Error as err:
 #         return jsonify({"error": str(err)}), 500
@@ -701,6 +699,7 @@ def declare_winners(current_user_email, contest_id):
                     VALUES (%s, %s, %s, %s)
                 """, (contest_id, winner['team_id'], winner['total_points'], rank))
 
+            db.commit()
             return jsonify({"message": "Winners declared successfully!", "winners": winners})
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
@@ -761,6 +760,7 @@ def update_profile(current_user_email):
                 "UPDATE users SET username = %s WHERE email = %s",
                 (new_username, current_user_email)
             )
+            db.commit()
             return jsonify({"message": "Profile updated successfully"})
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
@@ -883,6 +883,7 @@ def distribute_prizes(current_user_email, contest_id):
                 """, (team['user_id'], f"🎉 You won ₹{prize_amount:.2f} in contest ID {contest_id} (Rank {rank})!"))
 
             cursor.execute("UPDATE contests SET status = 'prizes_distributed' WHERE id = %s", (contest_id,))
+            db.commit()
 
             return jsonify({
                 "message": f"Prizes distributed for contest {contest_id}",
@@ -933,6 +934,7 @@ def declare_winner_api(current_user_email):
             new_balance = wallet[0] + amount
             cursor.execute("UPDATE wallets SET balance = %s WHERE user_id = %s", (new_balance, user_id))
 
+        db.commit()
         return jsonify({"message": f"Prize money ₹{amount} added to user {user_id} wallet!"})
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
@@ -1345,9 +1347,11 @@ def admin_create_match(current_user_email):
                     p['nationality'], p['player_type'], p['team_id'], p['image'], p['country']
                 ))
 
+        db.commit()
         return jsonify({"message": "✅ Match and players added successfully", "match_id": match_id}), 201
 
     except Exception as e:
+        db.rollback()
         app.logger.exception("Error creating match")
         return jsonify({"error": str(e)}), 500
 
@@ -1373,9 +1377,11 @@ def admin_delete_contest(current_user_email):
 
             cursor.execute("DELETE FROM contests WHERE id = %s", (contest_id,))
 
+        db.commit()
         return jsonify({"message": "✅ Contest deleted successfully!"})
 
     except Exception as err:
+        db.rollback()
         print("❌ Delete contest error:", err)
         return jsonify({"error": str(err)}), 500
 
@@ -1441,9 +1447,11 @@ def delete_match(current_user_email):
             # Step 6: Delete match
             cur.execute("DELETE FROM matches WHERE id = %s", (match_id,))
 
+        db.commit()
         return jsonify({"message": "✅ Match and all related data deleted successfully"}), 200
 
     except Exception as e:
+        db.rollback()
         app.logger.exception("❌ Failed to delete match")
         return jsonify({"message": "Internal server error"}), 500
 
@@ -1578,6 +1586,7 @@ def admin_password_reset(current_user_email):
 
     with mysql_cursor() as cursor:
         cursor.execute("UPDATE users SET password = %s WHERE id = %s", (hashed, user_id))
+    db.commit()
 
     return jsonify({"message": f"Password for user #{user_id} has been reset ✅"})
 
@@ -1639,9 +1648,11 @@ def adjust_wallet(current_user_email):
                 (user_id, "credit" if amount > 0 else "debit", abs(amount), note)
             )
 
+        db.commit()
         return jsonify({"message": "Wallet adjusted"}), 200
 
     except Exception as e:
+        db.rollback()
         print("❌ WALLET_ADJUST ERROR:", e)
         return jsonify({"error": str(e)}), 500
 
@@ -1658,8 +1669,10 @@ def toggle_admin(current_user_email):
                 SET is_admin = 1 - is_admin 
                 WHERE id = %s
             """, (user_id,))
+        db.commit()
         return jsonify({"message": "Admin status toggled"}), 200
     except Exception as e:
+        db.rollback()
         return jsonify({"error": str(e)}), 500
 
 @app.route('/admin/ban_user', methods=['POST'])
@@ -1686,12 +1699,14 @@ def ban_user(current_user_email):
                 "UPDATE users SET is_banned = %s WHERE id = %s",
                 (new_flag, user_id)
             )
+        db.commit()
         return jsonify({
             "message": "Ban status updated",
             "is_banned": bool(new_flag)
         }), 200
 
     except Exception as e:
+        db.rollback()
         return jsonify({"message": str(e)}), 500
 
 @app.route('/admin/user_transactions/<int:user_id>', methods=['GET','OPTIONS'])
@@ -2181,7 +2196,7 @@ def generate_team(current_user_email, match_id):
             return jsonify({"message": "Max 100 AI teams per request"}), 400
 
         # 2) Fetch user
-        with mysql_cursor(dictionary=True) as cur:
+        cur = db.cursor(dictionary=True)
         cur.execute(
             "SELECT id FROM users WHERE email=%s",
             (current_user_email,)
@@ -2302,6 +2317,7 @@ def generate_team(current_user_email, match_id):
             )
             team_ids.append(team_id)
 
+        db.commit()
 
         return jsonify({
             "success":            bool(team_ids),
@@ -2325,7 +2341,7 @@ def get_players_with_contest_stats(current_user_email, match_id):
     try:
         contest_id = request.args.get('contest_id', type=int)
 
-        with mysql_cursor(dictionary=True) as cur:
+        cur = db.cursor(dictionary=True)
         cur.execute("""
             SELECT id, player_name, role
             FROM players
@@ -2369,7 +2385,7 @@ def get_players_with_contest_stats(current_user_email, match_id):
 @token_required
 def user_entries(current_user_email, contest_id):
     try:
-        with mysql_cursor(dictionary=True) as cur:
+        cur = db.cursor(dictionary=True)
 
         # Get user ID and username
         cur.execute("SELECT id, username FROM users WHERE email = %s", (current_user_email,))
@@ -2415,7 +2431,7 @@ def get_user_team(current_user_email, team_id):
         return '', 204  # CORS preflight
 
     try:
-        with mysql_cursor(dictionary=True) as cur:
+        cur = db.cursor(dictionary=True)
 
         # Get user ID
         cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
@@ -2451,7 +2467,7 @@ def get_user_team(current_user_email, team_id):
 @token_required
 def unjoined_teams_for_user(current_user_email, contest_id):
     try:
-        with mysql_cursor(dictionary=True) as cur:
+        cur = db.cursor(dictionary=True)
 
         cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
         user = cur.fetchone()
@@ -2488,7 +2504,7 @@ def join_contest_bulk(current_user_email):
         if not contest_id or not team_ids or not isinstance(team_ids, list):
             return jsonify({"message": "contest_id and team_ids (list) required"}), 400
 
-        with mysql_cursor(dictionary=False) as cur:
+        cur = db.cursor()
         cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
         user = cur.fetchone()
         if not user:
@@ -2511,6 +2527,7 @@ def join_contest_bulk(current_user_email):
             cur.execute("INSERT INTO entries (user_id, team_id, contest_id) VALUES (%s, %s, %s)", (user_id, team_id, contest_id))
             inserted += 1
 
+        db.commit()
         return jsonify({"message": f"{inserted} team(s) joined successfully."})
 
     except Exception as e:
@@ -2521,7 +2538,7 @@ def join_contest_bulk(current_user_email):
 @app.route('/match/<int:match_id>', methods=['GET'])
 def get_match_by_id(match_id):
     try:
-        with mysql_cursor(dictionary=True) as cur:
+        cur = db.cursor(dictionary=True)
         cur.execute("SELECT id, match_name AS name, start_time FROM matches WHERE id = %s", (match_id,))
         match = cur.fetchone()
         if match:
@@ -2536,7 +2553,7 @@ def get_match_by_id(match_id):
 @app.route('/contest/<int:contest_id>', methods=['GET'])
 def get_contest_by_id(contest_id):
     try:
-        with mysql_cursor(dictionary=True) as cur:
+        cur = db.cursor(dictionary=True)
         cur.execute("""
             SELECT 
                 id, 
@@ -2572,7 +2589,7 @@ def delete_teams_bulk(current_user_email):
         if not team_ids or not isinstance(team_ids, list):
             return jsonify({"message": "team_ids (list) required"}), 400
 
-        with mysql_cursor(dictionary=False) as cur:
+        cur = db.cursor()
         cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
         user = cur.fetchone()
         if not user:
@@ -2600,6 +2617,7 @@ def delete_teams_bulk(current_user_email):
             cur.execute("DELETE FROM teams WHERE id=%s", (team_id,))
             deleted += 1
 
+        db.commit()
         return jsonify({"message": f"{deleted} team(s) deleted."})
 
     except Exception as e:
@@ -2615,7 +2633,7 @@ def get_user_teams_for_contest(current_user_email, contest_id):
         return '', 204
 
     try:
-        with mysql_cursor(dictionary=True) as cur:
+        cur = db.cursor(dictionary=True)
 
         # Step 1: Get user ID from email
         cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
@@ -2654,7 +2672,7 @@ def get_user_teams_for_contest(current_user_email, contest_id):
 @app.route('/my_contest/<int:user_id>/<int:contest_id>', methods=['GET'])
 def get_my_contest(user_id, contest_id):
     try:
-        with mysql_cursor(dictionary=True) as cursor:
+        cursor = db.cursor(dictionary=True)
         query = """
             SELECT  c.id,
                     c.contest_name,
@@ -2742,7 +2760,7 @@ def get_match_players_with_stats(current_user_email, match_id):
     """
     import re
     contest_id = request.args.get('contest_id', type=int)
-    with mysql_cursor(dictionary=True) as cur:
+    cur = db.cursor(dictionary=True)  # changed from mysql.connection.cursor
 
     # a) fetch match_name
     cur.execute("SELECT match_name FROM matches WHERE id = %s", (match_id,))
@@ -2834,6 +2852,7 @@ def generate_ai_teams_task(match_id, contest_id, user_id, count):
                     captain,
                     vice_captain
                 ))
+                db.commit()  # Assuming db is your MySQL connection object
 
             created += 1
 
