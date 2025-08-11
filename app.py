@@ -278,7 +278,7 @@ def create_team(current_user_email):
             return jsonify({"message": "team_name, 11 players & contest_id required"}), 400
 
         # user ID lookup
-        cur = db.connection.cursor()
+        cur = db.cursor()
         cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
         row = cur.fetchone()
         if not row:
@@ -433,7 +433,7 @@ def join_contest_by_url(current_user_email, contest_id):
 #         return jsonify({"message": "Missing required fields"}), 400
 
 #     try:
-#         cursor = db.connection.cursor()
+#         cursor = db.cursor()
 #         total_collection = float(entry_fee) * int(total_spots)
 #         commission_amount = total_collection * (float(commission_percentage) / 100)
 #         prize_pool = total_collection - commission_amount
@@ -2188,7 +2188,7 @@ def generate_team(current_user_email, match_id):
             return jsonify({"message": "Max 100 AI teams per request"}), 400
 
         # 2) Fetch user
-        cur = db.connection.cursor(dictionary=True)
+        cur = db.cursor(dictionary=True)
         cur.execute(
             "SELECT id FROM users WHERE email=%s",
             (current_user_email,)
@@ -2333,7 +2333,7 @@ def get_players_with_contest_stats(current_user_email, match_id):
     try:
         contest_id = request.args.get('contest_id', type=int)
 
-        cur = db.connection.cursor(dictionary=True)
+        cur = db.cursor(dictionary=True)
         cur.execute("""
             SELECT id, player_name, role
             FROM players
@@ -2377,7 +2377,7 @@ def get_players_with_contest_stats(current_user_email, match_id):
 @token_required
 def user_entries(current_user_email, contest_id):
     try:
-        cur = db.connection.cursor(dictionary=True)
+        cur = db.cursor(dictionary=True)
 
         # Get user ID and username
         cur.execute("SELECT id, username FROM users WHERE email = %s", (current_user_email,))
@@ -2423,7 +2423,7 @@ def get_user_team(current_user_email, team_id):
         return '', 204  # CORS preflight
 
     try:
-        cur = db.connection.cursor(dictionary=True)
+        cur = db.cursor(dictionary=True)
 
         # Get user ID
         cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
@@ -2459,7 +2459,7 @@ def get_user_team(current_user_email, team_id):
 @token_required
 def unjoined_teams_for_user(current_user_email, contest_id):
     try:
-        cur = db.connection.cursor(dictionary=True)
+        cur = db.cursor(dictionary=True)
 
         cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
         user = cur.fetchone()
@@ -2496,7 +2496,7 @@ def join_contest_bulk(current_user_email):
         if not contest_id or not team_ids or not isinstance(team_ids, list):
             return jsonify({"message": "contest_id and team_ids (list) required"}), 400
 
-        cur = db.connection.cursor()
+        cur = db.cursor()
         cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
         user = cur.fetchone()
         if not user:
@@ -2530,7 +2530,7 @@ def join_contest_bulk(current_user_email):
 @app.route('/match/<int:match_id>', methods=['GET'])
 def get_match_by_id(match_id):
     try:
-        cur = db.connection.cursor(dictionary=True)
+        cur = db.cursor(dictionary=True)
         cur.execute("SELECT id, match_name AS name, start_time FROM matches WHERE id = %s", (match_id,))
         match = cur.fetchone()
         if match:
@@ -2545,7 +2545,7 @@ def get_match_by_id(match_id):
 @app.route('/contest/<int:contest_id>', methods=['GET'])
 def get_contest_by_id(contest_id):
     try:
-        cur = db.connection.cursor(dictionary=True)
+        cur = db.cursor(dictionary=True)
         cur.execute("""
             SELECT 
                 id, 
@@ -2581,7 +2581,7 @@ def delete_teams_bulk(current_user_email):
         if not team_ids or not isinstance(team_ids, list):
             return jsonify({"message": "team_ids (list) required"}), 400
 
-        cur = db.connection.cursor()
+        cur = db.cursor()
         cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
         user = cur.fetchone()
         if not user:
@@ -2625,7 +2625,7 @@ def get_user_teams_for_contest(current_user_email, contest_id):
         return '', 204
 
     try:
-        cur = db.connection.cursor(dictionary=True)
+        cur = db.cursor(dictionary=True)
 
         # Step 1: Get user ID from email
         cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
@@ -2664,7 +2664,7 @@ def get_user_teams_for_contest(current_user_email, contest_id):
 @app.route('/my_contest/<int:user_id>/<int:contest_id>', methods=['GET'])
 def get_my_contest(user_id, contest_id):
     try:
-        cursor = db.connection.cursor(dictionary=True)
+        cursor = db.cursor(dictionary=True)
         query = """
             SELECT  c.id,
                     c.contest_name,
@@ -2752,7 +2752,7 @@ def get_match_players_with_stats(current_user_email, match_id):
     """
     import re
     contest_id = request.args.get('contest_id', type=int)
-    cur = db.connection.cursor(dictionary=True)  # changed from mysql.connection.cursor
+    cur = db.cursor(dictionary=True)  # changed from mysql.connection.cursor
 
     # a) fetch match_name
     cur.execute("SELECT match_name FROM matches WHERE id = %s", (match_id,))
