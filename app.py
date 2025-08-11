@@ -86,8 +86,8 @@ def get_db_connection():
     db = MySQL(app)
 
 
-    app.register_blueprint(ai_bp)
 from ai_team import ai_bp
+app.register_blueprint(ai_bp)
 
 @contextmanager
 def mysql_cursor(dictionary=False):
