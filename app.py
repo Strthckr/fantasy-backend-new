@@ -16,7 +16,6 @@ import re
 from celery import Celery
 from contextlib import contextmanager
 import random
-from ai_team import ai_bp
 
 
 
@@ -66,7 +65,6 @@ def handle_preflight():
         response.status_code = 200
         return response
     
-    app.register_blueprint(ai_bp)
 
 
 # Load secret key into Flask config from .env (used for JWT)
@@ -86,6 +84,10 @@ def get_db_connection():
         database=os.getenv('DB_NAME')
     )
     db = MySQL(app)
+
+
+    app.register_blueprint(ai_bp)
+from ai_team import ai_bp
 
 @contextmanager
 def mysql_cursor(dictionary=False):
