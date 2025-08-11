@@ -1,7 +1,6 @@
-# ai_team.py
 from flask import Blueprint, request, jsonify
 import json
-from utils import mysql_cursor, token_required, pick_team
+from utils import mysql_cursor, token_required, pick_team  # <-- works if utils.py is in same folder
 
 ai_bp = Blueprint("ai_bp", __name__)
 

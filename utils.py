@@ -1,9 +1,7 @@
-# utils.py
 import os
 import random
-from contextlib import contextmanager
 import mysql.connector
-from flask import current_app
+from contextlib import contextmanager
 from functools import wraps
 from flask import request, jsonify
 import jwt
@@ -33,13 +31,13 @@ def token_required(f):
     def decorated(*args, **kwargs):
         token = request.headers.get("Authorization")
         if not token:
-            return jsonify({"message": "Token is missing!"}), 403
+            return jsonify({"message": "Token missing"}), 403
         try:
             token = token.replace("Bearer ", "")
             data = jwt.decode(token, os.getenv("SECRET_KEY"), algorithms=["HS256"])
             return f(data["email"], *args, **kwargs)
         except Exception:
-            return jsonify({"message": "Token is invalid!"}), 403
+            return jsonify({"message": "Token invalid"}), 403
     return decorated
 
 def pick_team(match_id):
