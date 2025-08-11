@@ -16,6 +16,9 @@ import re
 from celery import Celery
 from contextlib import contextmanager
 import random
+from ai_team import ai_bp
+
+
 
 
 
@@ -34,6 +37,7 @@ print("✅ SECRET_KEY:", os.getenv("SECRET_KEY"))
 # ─── FLASK APP INITIALIZATION ──────────────────────────────────────────────────
 app = Flask(__name__)
 db = MySQL(app)
+app.register_blueprint(ai_bp)
 
 # CORS setup: Allow frontend on localhost:3000 to access this backend
 CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
@@ -2812,51 +2816,6 @@ def get_match_players_with_stats(current_user_email, match_id):
                 p['taken_percent'] = round(cnt * 100 / total)
 
     return jsonify({'players': players}), 200
-
-
-
-@app.route('/api/matches/<int:match_id>/contest/<int:contest_id>/players', methods=['GET'])
-@token_required
-def get_players_for_ai_page(current_user_email, match_id, contest_id):
-    import re
-    try:
-        with mysql_cursor(dictionary=True) as cur:
-            # 1) Get match_name
-            cur.execute("SELECT match_name FROM matches WHERE id = %s", (match_id,))
-            match = cur.fetchone()
-            if not match:
-                return jsonify({'error': 'Match not found'}), 404
-
-            # 2) Parse team names correctly ("vs" only)
-            sides = [s.strip() for s in re.split(r'\s+vs\s+', match['match_name'], flags=re.IGNORECASE) if s.strip()]
-
-            if len(sides) == 2:
-                sql = """
-                    SELECT id, player_name, role, team_name, credit_value, is_playing, position
-                    FROM players
-                    WHERE team_name IN (%s, %s) AND match_id = %s
-                    ORDER BY is_playing DESC, position ASC
-                """
-                params = (sides[0], sides[1], match_id)
-            else:
-                sql = """
-                    SELECT id, player_name, role, team_name, credit_value, is_playing, position
-                    FROM players
-                    WHERE match_id = %s
-                    ORDER BY is_playing DESC, position ASC
-                """
-                params = (match_id,)
-
-            cur.execute(sql, params)
-            players = cur.fetchall()
-            return jsonify({"players": players}), 200
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        app.logger.error(f"🔴 Error fetching players: {e}")
-        return jsonify({"message": "Internal Server Error"}), 500
-
 
 
 
