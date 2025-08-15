@@ -2922,6 +2922,7 @@ def generate_ai_teams_task(match_id, contest_id, user_id, count, must_have=None,
     return {"message": f"{created} teams created successfully."}
 
 
+
 @app.route('/api/ai/generate_sync', methods=['POST'])
 def trigger_ai_team_generation_sync():
     try:
@@ -2947,28 +2948,6 @@ def trigger_ai_team_generation_sync():
 
     except Exception as e:
         app.logger.exception("Failed to trigger AI team generation")
-        return jsonify({'error': 'Internal Server Error'}), 500
-
-
-@app.route('/api/ai/generate_sync', methods=['POST'])
-def trigger_ai_team_generation_sync():
-    try:
-        data = request.get_json()
-        match_id = data.get('match_id')
-        contest_id = data.get('contest_id')
-        user_id = data.get('user_id')
-        count = data.get('count', 1)
-
-        if not all([match_id, contest_id, user_id]):
-            return jsonify({'error': 'Missing parameters'}), 400
-
-        task = generate_ai_teams_task.apply_async(args=[match_id, contest_id, user_id, count])
-
-        return jsonify({'message': 'AI team generation started.', 'task_id': task.id}), 202
-
-    except Exception as e:
-        print(f"[ERROR] Failed to trigger task: {e}")
-        traceback.print_exc()
         return jsonify({'error': 'Internal Server Error'}), 500
 
 
