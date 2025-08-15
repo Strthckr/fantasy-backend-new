@@ -2762,6 +2762,48 @@ def get_match_players_with_stats(current_user_email, match_id):
     return jsonify({'players': players}), 200
 
 
+@app.route('/api/matches/<int:match_id>/contest/<int:contest_id>/players', methods=['GET'])
+@token_required
+def get_players_for_match_and_contest(current_user_email, match_id, contest_id):
+    try:
+        with mysql_cursor(dictionary=True) as cur:
+            # Fetch players for the given match
+            cur.execute("""
+                SELECT id, player_name, role, team_name, is_playing, position
+                FROM players
+                WHERE match_id = %s
+                ORDER BY is_playing DESC, position ASC
+            """, (match_id,))
+            players = cur.fetchall()
+
+            # Initialize stats
+            for p in players:
+                p['taken_count'] = 0
+                p['taken_percent'] = 0
+
+            # Get contest selection stats
+            cur.execute("SELECT COUNT(*) AS total FROM entries WHERE contest_id = %s", (contest_id,))
+            total = cur.fetchone().get('total', 0) or 0
+
+            if total > 0:
+                for p in players:
+                    cur.execute("""
+                        SELECT COUNT(*) AS cnt
+                        FROM entries e
+                        JOIN teams t ON e.team_id = t.id
+                        WHERE e.contest_id = %s
+                          AND JSON_CONTAINS(t.players, JSON_OBJECT('player_name', %s), '$')
+                    """, (contest_id, p['player_name']))
+                    cnt = cur.fetchone().get('cnt', 0) or 0
+                    p['taken_count'] = cnt
+                    p['taken_percent'] = round(cnt * 100 / total)
+
+        return jsonify({"players": players}), 200
+    except Exception as e:
+        app.logger.exception(e)
+        return jsonify({"message": "Failed to load players"}), 500
+
+
 
 
 @celery.task()
