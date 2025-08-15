@@ -5,7 +5,6 @@ import jwt
 from functools import wraps
 from flask import Flask, request, jsonify, make_response
 import mysql.connector
-from flask_mysqldb import MySQL
 import json
 from decimal import Decimal
 from dotenv import load_dotenv
@@ -17,32 +16,16 @@ from celery import Celery
 from contextlib import contextmanager
 import random
 
-
-
-
-
-
 # ─── LOAD ENVIRONMENT VARIABLES ────────────────────────────────────────────────
-# Load variables from a .env file (good for DB credentials, secret keys, etc.)
 load_dotenv()
-
-# ✅ Debug print to confirm variables are loaded correctly
-print("✅ DB_HOST:", os.getenv("DB_HOST"))
-print("✅ DB_USER:", os.getenv("DB_USER"))
-print("✅ DB_PASSWORD:", os.getenv("DB_PASSWORD"))
-print("✅ DB_NAME:", os.getenv("DB_NAME"))
-print("✅ SECRET_KEY:", os.getenv("SECRET_KEY"))
 
 # ─── FLASK APP INITIALIZATION ──────────────────────────────────────────────────
 app = Flask(__name__)
-db = MySQL(app)
 
-
-# CORS setup: Allow frontend on localhost:3000 to access this backend
+# CORS setup
 CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
 
-# ─── CELERY SETUP ──────────────────────────────────────────────────────────────
-# ─── CELERY SETUP ──────────────────────────────────────────────────────────────
+# Celery setup
 def make_celery(app):
     celery = Celery(
         app.import_name,
@@ -54,7 +37,6 @@ def make_celery(app):
 
 celery = make_celery(app)
 
-
 @app.before_request
 def handle_preflight():
     if request.method == 'OPTIONS':
@@ -64,17 +46,11 @@ def handle_preflight():
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
         response.status_code = 200
         return response
-    
 
-
-# Load secret key into Flask config from .env (used for JWT)
+# Load secret key into Flask config from .env
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')
-print("✅ SECRET_KEY loaded:", app.config['SECRET_KEY'])
 
 # ─── DATABASE CONNECTION SETUP ─────────────────────────────────────────────────
-# Connect to MySQL using credentials from .env file
-# ─── DATABASE CONNECTION SETUP ────────────────────────────────────────────────
-
 def get_db_connection():
     return mysql.connector.connect(
         host=os.getenv('DB_HOST'),
@@ -83,11 +59,6 @@ def get_db_connection():
         password=os.getenv('DB_PASSWORD'),
         database=os.getenv('DB_NAME')
     )
-    db = MySQL(app)
-
-
-from ai_team import ai_bp
-app.register_blueprint(ai_bp)
 
 @contextmanager
 def mysql_cursor(dictionary=False):
@@ -100,8 +71,25 @@ def mysql_cursor(dictionary=False):
         cursor.close()
         conn.close()
 
+# ─── HELPER: JWT Token Required ────────────────────────────────────────────────
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        if 'Authorization' in request.headers:
+            token = request.headers['Authorization'].split(" ")[1]
+        if not token:
+            return jsonify({'message': 'Token is missing!'}), 401
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            current_user_email = data['email']
+        except Exception as e:
+            print("JWT Decode Error:", e)
+            return jsonify({'message': 'Token is invalid!'}), 401
+        return f(current_user_email, *args, **kwargs)
+    return decorated
 
-# 🧠 Updated: pick_team using context-managed MySQL connection
+# ─── HELPER: Pick Random Team ──────────────────────────────────────────────────
 def pick_team(match_id):
     try:
         with mysql_cursor(dictionary=True) as cursor:
@@ -116,21 +104,18 @@ def pick_team(match_id):
         if len(players) != 11:
             return None
 
-        # Randomly assign captain/vice
         captain_index = random.randint(0, 10)
         vice_captain_index = (captain_index + 1) % 11
 
         for i, player in enumerate(players):
             player['is_captain'] = (i == captain_index)
             player['is_vice_captain'] = (i == vice_captain_index)
-            player['player_id'] = player['id']  # Ensure compatibility
+            player['player_id'] = player['id']
 
         return players
-
     except Exception as e:
         print(f"Error in pick_team(): {e}")
         return None
-
 
 
 # ─── JWT TOKEN PROTECTION DECORATOR ────────────────────────────────────────────
@@ -285,57 +270,57 @@ def create_team(current_user_email):
         if not team_name or len(players) != 11 or not contest_id:
             return jsonify({"message": "team_name, 11 players & contest_id required"}), 400
 
-        # user ID lookup
-        cur = db.cursor()
-        cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
-        row = cur.fetchone()
-        if not row:
-            return jsonify({"message": "User not found"}), 404
-        user_id = row[0]
+        with mysql_cursor(dictionary=True) as cur:
+            # user ID lookup
+            cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+            row = cur.fetchone()
+            if not row:
+                return jsonify({"message": "User not found"}), 404
+            user_id = row['id']
 
-        # max teams check
-        cur.execute("SELECT max_teams_per_user FROM contests WHERE id=%s", (contest_id,))
-        max_teams = cur.fetchone()[0] or 0
+            # max teams check
+            cur.execute("SELECT max_teams_per_user FROM contests WHERE id=%s", (contest_id,))
+            max_teams_row = cur.fetchone()
+            max_teams = max_teams_row['max_teams_per_user'] if max_teams_row else 0
 
-        cur.execute("""
-            SELECT COUNT(*) FROM teams
-            WHERE user_id=%s AND contest_id=%s
-        """, (user_id, contest_id))
-        already = cur.fetchone()[0]
-        if max_teams and already >= max_teams:
-            return jsonify({"message": f"Only {max_teams} teams allowed"}), 403
+            cur.execute("""
+                SELECT COUNT(*) AS count FROM teams
+                WHERE user_id=%s AND contest_id=%s
+            """, (user_id, contest_id))
+            already = cur.fetchone()['count']
+            if max_teams and already >= max_teams:
+                return jsonify({"message": f"Only {max_teams} teams allowed"}), 403
 
-        # current combination to check against duplicates
-        current_names = sorted([p['player_name'] for p in players])
+            # current combination to check against duplicates
+            current_names = sorted([p['player_name'] for p in players])
 
-        cur.execute("""
-            SELECT players FROM teams
-            WHERE user_id=%s AND contest_id=%s
-        """, (user_id, contest_id))
+            cur.execute("""
+                SELECT players FROM teams
+                WHERE user_id=%s AND contest_id=%s
+            """, (user_id, contest_id))
 
-        for (js,) in cur.fetchall():
-            existing = json.loads(js) if js else []
-            if not existing:
-                continue
+            for row in cur.fetchall():
+                existing = json.loads(row['players']) if row['players'] else []
+                if not existing:
+                    continue
 
-            # safe handling based on structure
-            if isinstance(existing[0], dict) and 'player_name' in existing[0]:
-                existing_names = sorted([p['player_name'] for p in existing])
-            elif isinstance(existing[0], str):
-                existing_names = sorted(existing)
-            else:
-                continue  # unknown structure, skip
+                # safe handling based on structure
+                if isinstance(existing[0], dict) and 'player_name' in existing[0]:
+                    existing_names = sorted([p['player_name'] for p in existing])
+                elif isinstance(existing[0], str):
+                    existing_names = sorted(existing)
+                else:
+                    continue  # unknown structure, skip
 
-            if existing_names == current_names:
-                return jsonify({"message": "Same combination used"}), 400
+                if existing_names == current_names:
+                    return jsonify({"message": "Same combination used"}), 400
 
-        # insert the new team
-        cur.execute("""
-            INSERT INTO teams
-                (team_name, players, user_id, contest_id)
-            VALUES (%s, %s, %s, %s)
-        """, (team_name, json.dumps(players), user_id, contest_id))
-        db.commit()
+            # insert the new team
+            cur.execute("""
+                INSERT INTO teams
+                    (team_name, players, user_id, contest_id)
+                VALUES (%s, %s, %s, %s)
+            """, (team_name, json.dumps(players), user_id, contest_id))
 
         return jsonify({"message": "Team created ✔"}), 200
 
@@ -2054,19 +2039,13 @@ def generate_team(current_user_email, match_id):
     def pick_team(pool, must_have=None, captain=None, vice_captain=None):
         import random, time, logging
         from collections import Counter
-
         random.seed(f"{time.time_ns()}-{random.random()}")
-
-        # 1) Role quotas
         quotas = {'batsman': 4, 'bowler': 3, 'allrounder': 2, 'keeper': 1}
-
-        # 2) Partition pool by role
         batsmen     = [p for p in pool if p['role'] == 'batsman']
         bowlers     = [p for p in pool if p['role'] == 'bowler']
         allrounders = [p for p in pool if p['role'] == 'allrounder']
         keepers     = [p for p in pool if p['role'] == 'keeper']
 
-        # 3) Pool sufficiency check
         if (len(batsmen) < quotas['batsman'] or
             len(bowlers) < quotas['bowler'] or
             len(allrounders) < quotas['allrounder'] or
@@ -2074,11 +2053,11 @@ def generate_team(current_user_email, match_id):
             logging.error("🧠 pick_team: pool cannot satisfy base quotas")
             return None
 
-        team            = []
-        selected_names  = set()
-        team_counter    = Counter()
+        team = []
+        selected_names = set()
+        team_counter = Counter()
 
-        # 4) Force-captain
+        # Force captain
         if captain:
             cap = next((p for p in pool if p['player_name'] == captain), None)
             if not cap:
@@ -2089,7 +2068,7 @@ def generate_team(current_user_email, match_id):
             if cap.get('team_name'):
                 team_counter[cap['team_name']] += 1
 
-        # 5) Force-vice-captain
+        # Force vice-captain
         if vice_captain:
             vc = next((p for p in pool if p['player_name'] == vice_captain), None)
             if not vc or vice_captain == captain:
@@ -2100,7 +2079,7 @@ def generate_team(current_user_email, match_id):
             if vc.get('team_name'):
                 team_counter[vc['team_name']] += 1
 
-        # 6) Must-have picks
+        # Must-have picks
         for name in (must_have or []):
             if name in selected_names:
                 continue
@@ -2113,12 +2092,10 @@ def generate_team(current_user_email, match_id):
             if m.get('team_name'):
                 team_counter[m['team_name']] += 1
 
-        # 7) Quota violation check
         if any(v < 0 for v in quotas.values()):
             logging.error("🧠 pick_team: forced picks exceed role quotas")
             return None
 
-        # 8) Helper to fill remaining slots
         def fill(group, count):
             sel, attempts = [], 0
             while len(sel) < count and attempts < 30:
@@ -2132,21 +2109,17 @@ def generate_team(current_user_email, match_id):
                 attempts += 1
             return sel
 
-        # 9) Fill each role up to quota
-        team += fill(batsmen,     quotas['batsman'])
-        team += fill(bowlers,     quotas['bowler'])
+        team += fill(batsmen, quotas['batsman'])
+        team += fill(bowlers, quotas['bowler'])
         team += fill(allrounders, quotas['allrounder'])
-        team += fill(keepers,     quotas['keeper'])
+        team += fill(keepers, quotas['keeper'])
 
-        # 10) Ensure 10 before final slot
-        if len(team) < sum([4, 3, 2, 1]):
+        if len(team) < 10:
             logging.error("🧠 pick_team: couldn't reach base roster of 10")
             return None
 
-        # 11) Final slot (no second keeper)
-        import random as _r
         remaining = [p for p in pool if p['player_name'] not in selected_names]
-        _r.shuffle(remaining)
+        random.shuffle(remaining)
         for p in remaining:
             if p['role'] == 'keeper':
                 continue
@@ -2156,12 +2129,10 @@ def generate_team(current_user_email, match_id):
                 selected_names.add(nm)
                 break
 
-        # 12) Validate 11 players
         if len(team) != 11:
             logging.error("🧠 pick_team: final roster not size 11")
             return None
 
-        # 13) Assign captain & vice-captain (forced or random)
         if not captain:
             cap = random.choice(team)
         if not vice_captain:
@@ -2172,158 +2143,116 @@ def generate_team(current_user_email, match_id):
             p['is_captain']      = (p['player_name'] == cap['player_name'])
             p['is_vice_captain'] = (p['player_name'] == vc['player_name'])
 
-        logging.warning(f"✅ pick_team generated: {[p['player_name'] for p in team]}")
         return team
 
-    # ─── Main Handler ─────────────────────────────────────────────────
     try:
-        import json, traceback
+        import json
         from collections import Counter
+        data = request.get_json() or {}
+        contest_id   = data.get("contest_id")
+        num_teams    = data.get("num_teams", 1)
+        mode         = data.get("generation_mode", "auto")
+        must_have    = [n.strip() for n in data.get("must_have", []) if n.strip()]
+        captain      = data.get("captain")
+        vice_captain = data.get("vice_captain")
 
-        data            = request.get_json() or {}
-        contest_id      = data.get("contest_id")
-        num_teams       = data.get("num_teams", 1)
-        mode            = data.get("generation_mode", "auto")
-        raw_must_have   = data.get("must_have", [])
-        must_have       = [n.strip() for n in raw_must_have if n.strip()]
-        captain         = data.get("captain")
-        vice_captain    = data.get("vice_captain")
-
-        # 1) Basic validation
         if not contest_id or not match_id:
             return jsonify({"message": "contest_id and match_id required"}), 400
         if num_teams > 100:
             return jsonify({"message": "Max 100 AI teams per request"}), 400
 
-        # 2) Fetch user
-        cur = db.cursor(dictionary=True)
-        cur.execute(
-            "SELECT id FROM users WHERE email=%s",
-            (current_user_email,)
-        )
-        user = cur.fetchone()
-        if not user:
-            return jsonify({"message": "User not found"}), 404
-        user_id = user["id"]
+        with mysql_cursor(dictionary=True) as cur:
+            cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+            user = cur.fetchone()
+            if not user:
+                return jsonify({"message": "User not found"}), 404
+            user_id = user["id"]
 
-        # 3) Load player pool
-        cur.execute(
-            """
-            SELECT 
-                id, 
-                player_name, 
-                LOWER(
-                    CASE 
-                        WHEN role = 'Wicket-Keeper' THEN 'keeper'
-                        WHEN role = 'All-Rounder' THEN 'allrounder'
-                        ELSE role
-                    END
-                ) AS role,
-                credit_value, 
-                team_name
-            FROM players 
-            WHERE match_id=%s
-            """,
-            (match_id,)
-        )
+            cur.execute("""
+                SELECT id, player_name, 
+                       LOWER(CASE WHEN role = 'Wicket-Keeper' THEN 'keeper'
+                                  WHEN role = 'All-Rounder' THEN 'allrounder'
+                                  ELSE role END) AS role,
+                       credit_value, team_name
+                FROM players 
+                WHERE match_id=%s
+            """, (match_id,))
+            pool = cur.fetchall()
+            if not pool:
+                return jsonify({"message": "No players found for this match"}), 404
 
-        pool = cur.fetchall()
-        if not pool:
-            return jsonify({"message": "No players found for this match"}), 404
+            if mode == "mustHave":
+                mh_counts = Counter()
+                missing   = []
+                for name in must_have:
+                    p = next((pl for pl in pool if pl["player_name"] == name), None)
+                    if not p:
+                        missing.append(name)
+                    else:
+                        mh_counts[p["role"]] += 1
+                violations = []
+                if mh_counts["keeper"] > 1:     violations.append("keeper > 1")
+                if mh_counts["batsman"] > 3:    violations.append("batsman > 3")
+                if mh_counts["bowler"] > 3:     violations.append("bowler > 3")
+                if mh_counts["allrounder"] > 3: violations.append("allrounder > 3")
+                if missing:
+                    violations.append("not in match: " + ", ".join(missing))
+                if violations:
+                    return jsonify({"message": "Invalid must-have: " + "; ".join(violations)}), 400
 
-        # 4) Must-have sanity (only for mustHave mode)
-        if mode == "mustHave":
-            mh_counts = Counter()
-            missing   = []
-            for name in must_have:
-                p = next((pl for pl in pool if pl["player_name"] == name), None)
-                if not p:
-                    missing.append(name)
-                else:
-                    mh_counts[p["role"]] += 1
+            cur.execute("""
+                SELECT COUNT(*) AS cnt 
+                FROM entries 
+                WHERE contest_id = %s AND user_id = %s
+            """, (contest_id, user_id))
+            existing = cur.fetchone()["cnt"]
 
-            violations = []
-            if mh_counts["keeper"] > 1:     violations.append("keeper > 1")
-            if mh_counts["batsman"] > 3:    violations.append("batsman > 3")
-            if mh_counts["bowler"] > 3:     violations.append("bowler > 3")
-            if mh_counts["allrounder"] > 3: violations.append("allrounder > 3")
-            if missing:
-                violations.append("not in match: " + ", ".join(missing))
+            existing_hashes = set()
+            team_ids = []
+            last_strength = 0
 
-            if violations:
-                return jsonify({
-                    "message": "Invalid must-have: " + "; ".join(violations)
-                }), 400
+            for i in range(num_teams):
+                squad = None
+                for _ in range(50):
+                    squad = pick_team(
+                        pool,
+                        must_have=(must_have if mode == "mustHave" else []),
+                        captain=(captain if mode == "capvice" else None),
+                        vice_captain=(vice_captain if mode == "capvice" else None)
+                    )
+                    if not squad:
+                        continue
+                    h = hash("".join(sorted(p["player_name"] for p in squad)))
+                    if h in existing_hashes:
+                        continue
+                    existing_hashes.add(h)
+                    break
 
-        # 5) Count existing AI entries
-        cur.execute(
-            """
-            SELECT COUNT(*) AS cnt 
-            FROM entries 
-            WHERE contest_id = %s AND user_id = %s
-            """,
-            (contest_id, user_id)
-        )
-        existing = cur.fetchone()["cnt"]
-
-        # 6) Generate & insert teams
-        existing_hashes = set()
-        team_ids        = []
-        last_strength   = 0
-
-        for i in range(num_teams):
-            squad = None
-            for _ in range(50):
-                squad = pick_team(
-                    pool,
-                    must_have=(must_have if mode == "mustHave" else []),
-                    captain=(captain if mode == "capvice" else None),
-                    vice_captain=(vice_captain if mode == "capvice" else None)
-                )
                 if not squad:
-                    continue
-                h = hash("".join(sorted(p["player_name"] for p in squad)))
-                if h in existing_hashes:
-                    continue
-                existing_hashes.add(h)
-                break
+                    return jsonify({"message": "Could not build a valid squad"}), 400
 
-            if not squad:
-                return jsonify({"message": "Could not build a valid squad"}), 400
+                for p in squad:
+                    p["credit_value"] = float(p["credit_value"])
+                    p["player_id"]    = p.get("id")
+                last_strength = sum(p["credit_value"] for p in squad) + 2
 
-            # normalize & compute strength
-            for p in squad:
-                p["credit_value"] = float(p["credit_value"])
-                p["player_id"]    = p.get("id")
-            last_strength = sum(p["credit_value"] for p in squad) + 2
+                cur.execute("""
+                    INSERT INTO teams (team_name, players, user_id, contest_id, strength_score) 
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (f"AI Team {existing + i + 1}", json.dumps(squad, default=str), user_id, contest_id, last_strength))
+                team_id = cur.lastrowid
 
-            # insert team
-            cur.execute(
-                """
-                INSERT INTO teams (team_name, players, user_id, contest_id, strength_score) 
-                VALUES (%s, %s, %s, %s, %s)
-                """,
-                (f"AI Team {existing + i + 1}", json.dumps(squad, default=str), user_id, contest_id, last_strength)
-            )
-            team_id = cur.lastrowid
-
-            # insert entry
-            cur.execute(
-                """
-                INSERT INTO entries (contest_id, user_id, team_id) 
-                VALUES (%s, %s, %s)
-                """,
-                (contest_id, user_id, team_id)
-            )
-            team_ids.append(team_id)
-
-        db.commit()
+                cur.execute("""
+                    INSERT INTO entries (contest_id, user_id, team_id) 
+                    VALUES (%s, %s, %s)
+                """, (contest_id, user_id, team_id))
+                team_ids.append(team_id)
 
         return jsonify({
-            "success":            bool(team_ids),
-            "team_ids":           team_ids,
-            "team_id":            team_ids[0] if team_ids else None,
-            "message":            f"{len(team_ids)} AI team(s) created ✔",
+            "success": bool(team_ids),
+            "team_ids": team_ids,
+            "team_id": team_ids[0] if team_ids else None,
+            "message": f"{len(team_ids)} AI team(s) created ✔",
             "last_team_strength": last_strength
         }), (200 if team_ids else 400)
 
@@ -2341,38 +2270,38 @@ def get_players_with_contest_stats(current_user_email, match_id):
     try:
         contest_id = request.args.get('contest_id', type=int)
 
-        cur = db.cursor(dictionary=True)
-        cur.execute("""
-            SELECT id, player_name, role
-            FROM players
-            WHERE match_id = %s
-        """, (match_id,))
-        players = cur.fetchall()
+        with mysql_cursor(dictionary=True) as cur:
+            cur.execute("""
+                SELECT id, player_name, role
+                FROM players
+                WHERE match_id = %s
+            """, (match_id,))
+            players = cur.fetchall()
 
-        # Initialize counts
-        for p in players:
-            p['taken_count'] = 0
-            p['taken_percent'] = 0
+            # Initialize counts
+            for p in players:
+                p['taken_count'] = 0
+                p['taken_percent'] = 0
 
-        if contest_id:
-            cur.execute(
-                "SELECT COUNT(*) AS total FROM entries WHERE contest_id = %s",
-                (contest_id,)
-            )
-            total = cur.fetchone()['total'] or 0
+            if contest_id:
+                cur.execute(
+                    "SELECT COUNT(*) AS total FROM entries WHERE contest_id = %s",
+                    (contest_id,)
+                )
+                total = cur.fetchone()['total'] or 0
 
-            if total > 0:
-                for p in players:
-                    cur.execute("""
-                        SELECT COUNT(*) AS cnt
-                        FROM entries e
-                        JOIN teams t ON e.team_id = t.id
-                        WHERE e.contest_id = %s
-                          AND JSON_CONTAINS(t.players, JSON_OBJECT('player_name', %s), '$')
-                    """, (contest_id, p['player_name']))
-                    cnt = cur.fetchone()['cnt'] or 0
-                    p['taken_count'] = cnt
-                    p['taken_percent'] = round(cnt * 100 / total)
+                if total > 0:
+                    for p in players:
+                        cur.execute("""
+                            SELECT COUNT(*) AS cnt
+                            FROM entries e
+                            JOIN teams t ON e.team_id = t.id
+                            WHERE e.contest_id = %s
+                              AND JSON_CONTAINS(t.players, JSON_OBJECT('player_name', %s), '$')
+                        """, (contest_id, p['player_name']))
+                        cnt = cur.fetchone()['cnt'] or 0
+                        p['taken_count'] = cnt
+                        p['taken_percent'] = round(cnt * 100 / total)
 
         return jsonify({"players": players}), 200
 
@@ -2385,43 +2314,44 @@ def get_players_with_contest_stats(current_user_email, match_id):
 @token_required
 def user_entries(current_user_email, contest_id):
     try:
-        cur = db.cursor(dictionary=True)
+        with mysql_cursor(dictionary=True) as cur:
+            # Get user ID and username
+            cur.execute(
+                "SELECT id, username FROM users WHERE email = %s",
+                (current_user_email,)
+            )
+            user_row = cur.fetchone()
+            if not user_row:
+                return jsonify({"message": "User not found"}), 404
 
-        # Get user ID and username
-        cur.execute("SELECT id, username FROM users WHERE email = %s", (current_user_email,))
-        user_row = cur.fetchone()
-        if not user_row:
-            return jsonify({"message": "User not found"}), 404
+            user_id = user_row["id"]
+            username = user_row["username"]
 
-        user_id = user_row["id"]
-        username = user_row["username"]
+            # Fetch user entries
+            cur.execute("""
+                SELECT
+                    e.id,
+                    t.team_name,
+                    t.players,
+                    t.total_points,
+                    t.strength_score,
+                    t.rating, 
+                    e.joined_at,
+                    %s AS username,
+                    t.id AS team_id
+                FROM entries e
+                JOIN teams t ON e.team_id = t.id
+                WHERE e.contest_id = %s AND e.user_id = %s
+                ORDER BY e.joined_at DESC
+            """, (username, contest_id, user_id))
 
-        # Fetch user entries
-        cur.execute("""
-            SELECT
-                e.id,
-                t.team_name,
-                t.players,
-                t.total_points,
-                t.strength_score,
-                t.rating, 
-                e.joined_at,
-                %s AS username,
-                t.id AS team_id
-            FROM entries e
-            JOIN teams t ON e.team_id = t.id
-            WHERE e.contest_id = %s AND e.user_id = %s
-            ORDER BY e.joined_at DESC
-        """, (username, contest_id, user_id))
+            rows = cur.fetchall()
 
-        rows = cur.fetchall()
         return jsonify({"entries": rows})
 
     except Exception as e:
         app.logger.exception(e)
         return jsonify({"message": "Failed to load user entries"}), 500
-
-
 
 
 @app.route('/user/team/<int:team_id>', methods=['GET', 'OPTIONS'])
@@ -2431,34 +2361,39 @@ def get_user_team(current_user_email, team_id):
         return '', 204  # CORS preflight
 
     try:
-        cur = db.cursor(dictionary=True)
-
-        # Get user ID
-        cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-        user_row = cur.fetchone()
-        if not user_row:
-            return jsonify({"message": "User not found"}), 404
-        user_id = user_row["id"]
-
-        # Get team only if belongs to user
-        cur.execute("""
-            SELECT team_name, players
-            FROM teams
-            WHERE id = %s AND user_id = %s
-        """, (team_id, user_id))
-        row = cur.fetchone()
-        if not row:
-            return jsonify({"message": "Team not found"}), 404
-
+        from helpers.mysql_cursor import mysql_cursor  # adjust path if needed
         import json
-        players = json.loads(row["players"]) if row["players"] else []
+
+        with mysql_cursor(dictionary=True) as cur:
+            # Get user ID
+            cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+            user_row = cur.fetchone()
+            if not user_row:
+                return jsonify({"message": "User not found"}), 404
+            user_id = user_row["id"]
+
+            # Get team only if belongs to user
+            cur.execute("""
+                SELECT id, team_name, players
+                FROM teams
+                WHERE id = %s AND user_id = %s
+            """, (team_id, user_id))
+            row = cur.fetchone()
+            if not row:
+                return jsonify({"message": "Team not found"}), 404
+
+            try:
+                players = json.loads(row["players"]) if row["players"] else []
+            except json.JSONDecodeError:
+                players = []
 
         return jsonify({
+            "team_id": row["id"],
             "team_name": row["team_name"],
             "players": players
         }), 200
 
-    except Exception as e:
+    except Exception:
         app.logger.exception("🛑 Failed to load team:")
         return jsonify({"message": "Internal Server Error"}), 500
 
@@ -2467,24 +2402,23 @@ def get_user_team(current_user_email, team_id):
 @token_required
 def unjoined_teams_for_user(current_user_email, contest_id):
     try:
-        cur = db.cursor(dictionary=True)
+        with mysql_cursor(dictionary=True) as cur:
+            cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+            user = cur.fetchone()
+            if not user:
+                return jsonify({"message": "User not found"}), 404
+            user_id = user["id"]
 
-        cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
-        user = cur.fetchone()
-        if not user:
-            return jsonify({"message": "User not found"}), 404
-        user_id = user["id"]
-
-        cur.execute("""
-            SELECT t.id AS team_id, t.team_name, t.strength_score, t.created_at
-            FROM teams t
-            WHERE t.user_id = %s
-              AND NOT EXISTS (
-                SELECT 1 FROM entries e
-                WHERE e.team_id = t.id AND e.contest_id = %s
-              )
-        """, (user_id, contest_id))
-        teams = cur.fetchall()
+            cur.execute("""
+                SELECT t.id AS team_id, t.team_name, t.strength_score, t.created_at
+                FROM teams t
+                WHERE t.user_id = %s
+                  AND NOT EXISTS (
+                    SELECT 1 FROM entries e
+                    WHERE e.team_id = t.id AND e.contest_id = %s
+                  )
+            """, (user_id, contest_id))
+            teams = cur.fetchall()
 
         return jsonify({"teams": teams})
 
@@ -2504,30 +2438,32 @@ def join_contest_bulk(current_user_email):
         if not contest_id or not team_ids or not isinstance(team_ids, list):
             return jsonify({"message": "contest_id and team_ids (list) required"}), 400
 
-        cur = db.cursor()
-        cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
-        user = cur.fetchone()
-        if not user:
-            return jsonify({"message": "User not found"}), 404
-        user_id = user[0]
-
         inserted = 0
-        for team_id in team_ids:
-            # Validate team ownership
-            cur.execute("SELECT id FROM teams WHERE id = %s AND user_id = %s", (team_id, user_id))
-            if not cur.fetchone():
-                continue
+        with mysql_cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+            user = cur.fetchone()
+            if not user:
+                return jsonify({"message": "User not found"}), 404
+            user_id = user[0]
 
-            # Skip if already joined
-            cur.execute("SELECT id FROM entries WHERE contest_id = %s AND team_id = %s", (contest_id, team_id))
-            if cur.fetchone():
-                continue
+            for team_id in team_ids:
+                # Validate team ownership
+                cur.execute("SELECT id FROM teams WHERE id = %s AND user_id = %s", (team_id, user_id))
+                if not cur.fetchone():
+                    continue
 
-            # Insert entry
-            cur.execute("INSERT INTO entries (user_id, team_id, contest_id) VALUES (%s, %s, %s)", (user_id, team_id, contest_id))
-            inserted += 1
+                # Skip if already joined
+                cur.execute("SELECT id FROM entries WHERE contest_id = %s AND team_id = %s", (contest_id, team_id))
+                if cur.fetchone():
+                    continue
 
-        db.commit()
+                # Insert entry
+                cur.execute(
+                    "INSERT INTO entries (user_id, team_id, contest_id) VALUES (%s, %s, %s)",
+                    (user_id, team_id, contest_id)
+                )
+                inserted += 1
+
         return jsonify({"message": f"{inserted} team(s) joined successfully."})
 
     except Exception as e:
@@ -2538,13 +2474,16 @@ def join_contest_bulk(current_user_email):
 @app.route('/match/<int:match_id>', methods=['GET'])
 def get_match_by_id(match_id):
     try:
-        cur = db.cursor(dictionary=True)
-        cur.execute("SELECT id, match_name AS name, start_time FROM matches WHERE id = %s", (match_id,))
-        match = cur.fetchone()
-        if match:
-            return jsonify(match), 200
-        else:
-            return jsonify({"message": "Match not found"}), 404
+        with mysql_cursor(dictionary=True) as cur:
+            cur.execute(
+                "SELECT id, match_name AS name, start_time FROM matches WHERE id = %s",
+                (match_id,)
+            )
+            match = cur.fetchone()
+            if match:
+                return jsonify(match), 200
+            else:
+                return jsonify({"message": "Match not found"}), 404
     except mysql.connector.Error as err:
         app.logger.exception("DB error in get_match_by_id")
         return jsonify({"error": str(err)}), 500
@@ -2553,32 +2492,31 @@ def get_match_by_id(match_id):
 @app.route('/contest/<int:contest_id>', methods=['GET'])
 def get_contest_by_id(contest_id):
     try:
-        cur = db.cursor(dictionary=True)
-        cur.execute("""
-            SELECT 
-                id, 
-                contest_name AS name, 
-                entry_fee, 
-                prize_pool,
-                start_time,
-                end_time,
-                match_id,
-                max_teams_per_user,
-                commission_percentage,
-                max_users,
-                joined_users
-            FROM contests 
-            WHERE id = %s
-        """, (contest_id,))
-        contest = cur.fetchone()
-        if contest:
-            return jsonify(contest), 200
-        else:
-            return jsonify({"message": "Contest not found"}), 404
+        with mysql_cursor(dictionary=True) as cur:
+            cur.execute("""
+                SELECT 
+                    id, 
+                    contest_name AS name, 
+                    entry_fee, 
+                    prize_pool,
+                    start_time,
+                    end_time,
+                    match_id,
+                    max_teams_per_user,
+                    commission_percentage,
+                    max_users,
+                    joined_users
+                FROM contests 
+                WHERE id = %s
+            """, (contest_id,))
+            contest = cur.fetchone()
+            if contest:
+                return jsonify(contest), 200
+            else:
+                return jsonify({"message": "Contest not found"}), 404
     except mysql.connector.Error as err:
         app.logger.exception("DB error in get_contest_by_id")
         return jsonify({"error": str(err)}), 500
-
 
 @app.route('/delete_teams', methods=['POST'])
 @token_required
@@ -2589,35 +2527,36 @@ def delete_teams_bulk(current_user_email):
         if not team_ids or not isinstance(team_ids, list):
             return jsonify({"message": "team_ids (list) required"}), 400
 
-        cur = db.cursor()
-        cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
-        user = cur.fetchone()
-        if not user:
-            return jsonify({"message": "User not found"}), 404
-        user_id = user[0]
+        with mysql_cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE email=%s", (current_user_email,))
+            user = cur.fetchone()
+            if not user:
+                return jsonify({"message": "User not found"}), 404
+            user_id = user[0]
 
-        deleted = 0
-        for team_id in team_ids:
-            # Check ownership
-            cur.execute("SELECT user_id FROM teams WHERE id=%s", (team_id,))
-            team = cur.fetchone()
-            if not team or team[0] != user_id:
-                continue
+            deleted = 0
+            for team_id in team_ids:
+                # Check ownership
+                cur.execute("SELECT user_id FROM teams WHERE id=%s", (team_id,))
+                team = cur.fetchone()
+                if not team or team[0] != user_id:
+                    continue
 
-            # Delete entries and related scores first (to avoid FK constraint issues)
-            cur.execute("SELECT id FROM entries WHERE team_id=%s", (team_id,))
-            entry_ids = [row[0] for row in cur.fetchall()]
+                # Delete entries and related scores first (to avoid FK constraint issues)
+                cur.execute("SELECT id FROM entries WHERE team_id=%s", (team_id,))
+                entry_ids = [row[0] for row in cur.fetchall()]
 
-            if entry_ids:
-                format_strings = ",".join(["%s"] * len(entry_ids))
-                cur.execute(f"DELETE FROM scores WHERE entry_id IN ({format_strings})", tuple(entry_ids))
-                cur.execute(f"DELETE FROM entries WHERE id IN ({format_strings})", tuple(entry_ids))
+                if entry_ids:
+                    format_strings = ",".join(["%s"] * len(entry_ids))
+                    cur.execute(f"DELETE FROM scores WHERE entry_id IN ({format_strings})", tuple(entry_ids))
+                    cur.execute(f"DELETE FROM entries WHERE id IN ({format_strings})", tuple(entry_ids))
 
-            # Then delete the team
-            cur.execute("DELETE FROM teams WHERE id=%s", (team_id,))
-            deleted += 1
+                # Then delete the team
+                cur.execute("DELETE FROM teams WHERE id=%s", (team_id,))
+                deleted += 1
 
-        db.commit()
+            db.commit()
+
         return jsonify({"message": f"{deleted} team(s) deleted."})
 
     except Exception as e:
@@ -2633,22 +2572,21 @@ def get_user_teams_for_contest(current_user_email, contest_id):
         return '', 204
 
     try:
-        cur = db.cursor(dictionary=True)
+        with mysql_cursor(dictionary=True) as cur:
+            # Step 1: Get user ID from email
+            cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
+            user_row = cur.fetchone()
+            if not user_row:
+                return jsonify({"message": "User not found"}), 404
+            user_id = user_row["id"]
 
-        # Step 1: Get user ID from email
-        cur.execute("SELECT id FROM users WHERE email = %s", (current_user_email,))
-        user_row = cur.fetchone()
-        if not user_row:
-            return jsonify({"message": "User not found"}), 404
-        user_id = user_row["id"]
-
-        # Step 2: Fetch teams for this contest and user
-        cur.execute("""
-            SELECT id AS team_id, team_name, players, strength_score, rating, team_style
-            FROM teams
-            WHERE contest_id = %s AND user_id = %s
-        """, (contest_id, user_id))
-        rows = cur.fetchall()
+            # Step 2: Fetch teams for this contest and user
+            cur.execute("""
+                SELECT id AS team_id, team_name, players, strength_score, rating, team_style
+                FROM teams
+                WHERE contest_id = %s AND user_id = %s
+            """, (contest_id, user_id))
+            rows = cur.fetchall()
 
         # Step 3: Format and return response
         teams = []
@@ -2672,31 +2610,33 @@ def get_user_teams_for_contest(current_user_email, contest_id):
 @app.route('/my_contest/<int:user_id>/<int:contest_id>', methods=['GET'])
 def get_my_contest(user_id, contest_id):
     try:
-        cursor = db.cursor(dictionary=True)
-        query = """
-            SELECT  c.id,
-                    c.contest_name,
-                    c.entry_fee,
-                    c.prize_pool,
-                    c.joined_users,
-                    c.max_users,
-                    m.start_time,
-                    m.end_time,
-                    CASE
-                        WHEN NOW() < m.start_time THEN 'UPCOMING'
-                        WHEN NOW() BETWEEN m.start_time AND m.end_time THEN 'LIVE'
-                        ELSE 'COMPLETED'
-                    END AS status
-            FROM contests c
-            JOIN matches m ON m.id = c.match_id
-            WHERE c.id = %s
-        """
-        cursor.execute(query, (contest_id,))  # Only contest_id here
-        contest = cursor.fetchone()
+        with mysql_cursor(dictionary=True) as cursor:
+            query = """
+                SELECT  c.id,
+                        c.contest_name,
+                        c.entry_fee,
+                        c.prize_pool,
+                        c.joined_users,
+                        c.max_users,
+                        m.start_time,
+                        m.end_time,
+                        CASE
+                            WHEN NOW() < m.start_time THEN 'UPCOMING'
+                            WHEN NOW() BETWEEN m.start_time AND m.end_time THEN 'LIVE'
+                            ELSE 'COMPLETED'
+                        END AS status
+                FROM contests c
+                JOIN matches m ON m.id = c.match_id
+                WHERE c.id = %s
+            """
+            cursor.execute(query, (contest_id,))
+            contest = cursor.fetchone()
+
         if contest:
             return jsonify(contest), 200
         else:
             return jsonify({"message": "Contest not found for this user"}), 404
+
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
 
@@ -2760,64 +2700,64 @@ def get_match_players_with_stats(current_user_email, match_id):
     """
     import re
     contest_id = request.args.get('contest_id', type=int)
-    cur = db.cursor(dictionary=True)  # changed from mysql.connection.cursor
 
-    # a) fetch match_name
-    cur.execute("SELECT match_name FROM matches WHERE id = %s", (match_id,))
-    match = cur.fetchone()
-    if not match:
-        return jsonify({'error': 'Match not found'}), 404
+    with mysql_cursor(dictionary=True) as cur:
+        # a) fetch match_name
+        cur.execute("SELECT match_name FROM matches WHERE id = %s", (match_id,))
+        match = cur.fetchone()
+        if not match:
+            return jsonify({'error': 'Match not found'}), 404
 
-    # b) parse "TeamA vs TeamB"
-    sides = [s.strip() for s in re.split(r'[^A-Za-z ]+', match['match_name']) if s.strip()]
+        # b) parse "TeamA vs TeamB"
+        sides = [s.strip() for s in re.split(r'[^A-Za-z ]+', match['match_name']) if s.strip()]
 
-    # c) load players for those sides (or fallback by match_id)
-    if len(sides) == 2:
-        sql = """
-          SELECT id, player_name, role, team_name, is_playing, position
-          FROM players
-          WHERE team_name IN (%s, %s)
-          ORDER BY is_playing DESC, position ASC
-        """
-        params = (sides[0], sides[1])
-    else:
-        sql = """
-          SELECT id, player_name, role, team_name, is_playing, position
-          FROM players
-          WHERE match_id = %s
-          ORDER BY is_playing DESC, position ASC
-        """
-        params = (match_id,)
+        # c) load players for those sides (or fallback by match_id)
+        if len(sides) == 2:
+            sql = """
+              SELECT id, player_name, role, team_name, is_playing, position
+              FROM players
+              WHERE team_name IN (%s, %s)
+              ORDER BY is_playing DESC, position ASC
+            """
+            params = (sides[0], sides[1])
+        else:
+            sql = """
+              SELECT id, player_name, role, team_name, is_playing, position
+              FROM players
+              WHERE match_id = %s
+              ORDER BY is_playing DESC, position ASC
+            """
+            params = (match_id,)
 
-    cur.execute(sql, params)
-    players = cur.fetchall()
+        cur.execute(sql, params)
+        players = cur.fetchall()
 
-    # d) initialize stats
-    for p in players:
-        p['taken_count']   = 0
-        p['taken_percent'] = 0
+        # d) initialize stats
+        for p in players:
+            p['taken_count']   = 0
+            p['taken_percent'] = 0
 
-    # e) if contest_id supplied, compute counts & percentages
-    if contest_id:
-        cur.execute("SELECT COUNT(*) AS total FROM entries WHERE contest_id = %s", (contest_id,))
-        total = cur.fetchone().get('total', 0) or 0
+        # e) if contest_id supplied, compute counts & percentages
+        if contest_id:
+            cur.execute("SELECT COUNT(*) AS total FROM entries WHERE contest_id = %s", (contest_id,))
+            total = cur.fetchone().get('total', 0) or 0
 
-        if total:
-            for p in players:
-                cur.execute("""
-                  SELECT COUNT(*) AS cnt
-                  FROM entries e
-                  JOIN teams t ON e.team_id = t.id
-                  WHERE e.contest_id = %s
-                    AND JSON_CONTAINS(
-                          t.players,
-                          JSON_OBJECT('player_name', %s),
-                          '$'
-                        )
-                """, (contest_id, p['player_name']))
-                cnt = cur.fetchone().get('cnt', 0) or 0
-                p['taken_count']   = cnt
-                p['taken_percent'] = round(cnt * 100 / total)
+            if total:
+                for p in players:
+                    cur.execute("""
+                      SELECT COUNT(*) AS cnt
+                      FROM entries e
+                      JOIN teams t ON e.team_id = t.id
+                      WHERE e.contest_id = %s
+                        AND JSON_CONTAINS(
+                              t.players,
+                              JSON_OBJECT('player_name', %s),
+                              '$'
+                            )
+                    """, (contest_id, p['player_name']))
+                    cnt = cur.fetchone().get('cnt', 0) or 0
+                    p['taken_count']   = cnt
+                    p['taken_percent'] = round(cnt * 100 / total)
 
     return jsonify({'players': players}), 200
 
