@@ -2398,6 +2398,7 @@ def get_user_team(current_user_email, team_id):
         return jsonify({"message": "Internal Server Error"}), 500
 
 
+
 @app.route('/user/contest/<int:contest_id>/unjoined-teams')
 @token_required
 def unjoined_teams_for_user(current_user_email, contest_id):
@@ -2517,6 +2518,7 @@ def get_contest_by_id(contest_id):
     except mysql.connector.Error as err:
         app.logger.exception("DB error in get_contest_by_id")
         return jsonify({"error": str(err)}), 500
+
 
 @app.route('/delete_teams', methods=['POST'])
 @token_required
@@ -2765,9 +2767,12 @@ def get_match_players_with_stats(current_user_email, match_id):
 @app.route('/api/matches/<int:match_id>/contest/<int:contest_id>/players', methods=['GET'])
 @token_required
 def get_players_for_match_and_contest(current_user_email, match_id, contest_id):
+    """
+    Returns players for a match with optional selection stats for the given contest.
+    """
     try:
         with mysql_cursor(dictionary=True) as cur:
-            # Fetch players for the given match
+            # Fetch players for the match
             cur.execute("""
                 SELECT id, player_name, role, team_name, is_playing, position
                 FROM players
@@ -2781,9 +2786,9 @@ def get_players_for_match_and_contest(current_user_email, match_id, contest_id):
                 p['taken_count'] = 0
                 p['taken_percent'] = 0
 
-            # Get contest selection stats
+            # Compute selection stats
             cur.execute("SELECT COUNT(*) AS total FROM entries WHERE contest_id = %s", (contest_id,))
-            total = cur.fetchone().get('total', 0) or 0
+            total = cur.fetchone()['total'] or 0
 
             if total > 0:
                 for p in players:
@@ -2794,72 +2799,155 @@ def get_players_for_match_and_contest(current_user_email, match_id, contest_id):
                         WHERE e.contest_id = %s
                           AND JSON_CONTAINS(t.players, JSON_OBJECT('player_name', %s), '$')
                     """, (contest_id, p['player_name']))
-                    cnt = cur.fetchone().get('cnt', 0) or 0
+                    cnt = cur.fetchone()['cnt'] or 0
                     p['taken_count'] = cnt
                     p['taken_percent'] = round(cnt * 100 / total)
 
         return jsonify({"players": players}), 200
+
     except Exception as e:
-        app.logger.exception(e)
+        app.logger.exception("Failed to load players for AI generation")
         return jsonify({"message": "Failed to load players"}), 500
 
 
 
 
 @celery.task()
-def generate_ai_teams_task(match_id, contest_id, user_id, count):
+def generate_ai_teams_task(match_id, contest_id, user_id, count, must_have=None, captain=None, vice_captain=None, mode="auto"):
+    from collections import Counter
+    import json, random, time, logging, traceback
+
+    # Normalize inputs
+    must_have = must_have or []
+    must_have = [n.strip() for n in must_have if n.strip()]
     created = 0
+    existing_hashes = set()
 
-    for i in range(count):
-        try:
-            team = pick_team(match_id)
+    try:
+        with mysql_cursor(dictionary=True) as cur:
+            # Load player pool
+            cur.execute("""
+                SELECT id, player_name, 
+                       LOWER(CASE WHEN role = 'Wicket-Keeper' THEN 'keeper'
+                                  WHEN role = 'All-Rounder' THEN 'allrounder'
+                                  ELSE role END) AS role,
+                       credit_value, team_name
+                FROM players 
+                WHERE match_id=%s
+            """, (match_id,))
+            pool = cur.fetchall()
 
-            if not team or len(team) != 11:
-                continue
+            if not pool:
+                return {"message": "No players found for this match."}
 
-            captain = next((p['player_name'] for p in team if p.get('is_captain')), None)
-            vice_captain = next((p['player_name'] for p in team if p.get('is_vice_captain')), None)
+            # Must-have sanity check (only if mode == mustHave)
+            if mode == "mustHave":
+                mh_counts = Counter()
+                missing = []
+                for name in must_have:
+                    p = next((pl for pl in pool if pl["player_name"] == name), None)
+                    if not p:
+                        missing.append(name)
+                    else:
+                        mh_counts[p["role"]] += 1
+                violations = []
+                if mh_counts["keeper"] > 1:     violations.append("keeper > 1")
+                if mh_counts["batsman"] > 3:    violations.append("batsman > 3")
+                if mh_counts["bowler"] > 3:     violations.append("bowler > 3")
+                if mh_counts["allrounder"] > 3: violations.append("allrounder > 3")
+                if missing:
+                    violations.append("not in match: " + ", ".join(missing))
+                if violations:
+                    return {"message": "Invalid must-have: " + "; ".join(violations)}
 
-            with mysql_cursor() as cursor:
-                insert_query = """
-                    INSERT INTO teams (team_name, players, user_id, contest_id, total_points, captain, vice_captain)
+            # Generate teams
+            for i in range(count):
+                squad = None
+                for _ in range(50):
+                    squad = pick_team(
+                        pool,
+                        must_have=(must_have if mode == "mustHave" else []),
+                        captain=(captain if mode == "capvice" else None),
+                        vice_captain=(vice_captain if mode == "capvice" else None)
+                    )
+                    if not squad:
+                        continue
+                    h = hash("".join(sorted(p["player_name"] for p in squad)))
+                    if h in existing_hashes:
+                        continue
+                    existing_hashes.add(h)
+                    break
+
+                if not squad:
+                    logging.warning(f"⚠ Could not build valid squad for team {i+1}")
+                    continue
+
+                # Compute strength score
+                for p in squad:
+                    p["credit_value"] = float(p["credit_value"])
+                    p["player_id"] = p.get("id")
+                strength_score = sum(p["credit_value"] for p in squad) + 2
+
+                # Captains
+                cap_name = next((p['player_name'] for p in squad if p.get('is_captain')), None)
+                vc_name = next((p['player_name'] for p in squad if p.get('is_vice_captain')), None)
+
+                # Insert into DB
+                cur.execute("""
+                    INSERT INTO teams (team_name, players, user_id, contest_id, strength_score, captain, vice_captain)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """
-                cursor.execute(insert_query, (
+                """, (
                     f"AI Team {i+1}",
-                    json.dumps(team),
+                    json.dumps(squad, default=str),
                     user_id,
                     contest_id,
-                    0,
-                    captain,
-                    vice_captain
+                    strength_score,
+                    cap_name,
+                    vc_name
                 ))
-                db.commit()  # Assuming db is your MySQL connection object
 
-            created += 1
+                team_id = cur.lastrowid
+                cur.execute("""
+                    INSERT INTO entries (contest_id, user_id, team_id)
+                    VALUES (%s, %s, %s)
+                """, (contest_id, user_id, team_id))
+                created += 1
 
-        except Exception as e:
-            print(f"[ERROR] Failed to create team {i+1}: {e}")
-            traceback.print_exc()
-            continue
+            db.commit()
+
+    except Exception as e:
+        traceback.print_exc()
+        logging.error(f"Error generating AI teams: {e}")
 
     return {"message": f"{created} teams created successfully."}
 
 
+@app.route('/api/ai/generate_sync', methods=['POST'])
+def trigger_ai_team_generation_sync():
+    try:
+        data = request.get_json()
+        match_id = data.get('match_id')
+        contest_id = data.get('contest_id')
+        user_id = data.get('user_id')
+        count = data.get('count', 1)
 
-@app.route('/api/ai/generate', methods=['POST'])
-def trigger_ai_team_generation():
-    data = request.json
-    match_id = data.get('match_id')
-    contest_id = data.get('contest_id')
-    user_id = data.get('user_id')
-    count = data.get('count', 1)
+        must_have = data.get('must_have', [])
+        captain = data.get('captain')
+        vice_captain = data.get('vice_captain')
+        mode = data.get('generation_mode', 'auto')
 
-    if not all([match_id, contest_id, user_id]):
-        return jsonify({"error": "Missing required fields"}), 400
+        if not all([match_id, contest_id, user_id]):
+            return jsonify({'error': 'Missing parameters'}), 400
 
-    task = generate_ai_teams_task.delay(match_id, contest_id, user_id, count)
-    return jsonify({"task_id": task.id, "status": "queued"}), 202
+        task = generate_ai_teams_task.apply_async(
+            args=[match_id, contest_id, user_id, count, must_have, captain, vice_captain, mode]
+        )
+
+        return jsonify({'message': 'AI team generation started.', 'task_id': task.id}), 202
+
+    except Exception as e:
+        app.logger.exception("Failed to trigger AI team generation")
+        return jsonify({'error': 'Internal Server Error'}), 500
 
 
 @app.route('/api/ai/generate_sync', methods=['POST'])
