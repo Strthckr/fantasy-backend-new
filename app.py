@@ -61,12 +61,18 @@ def get_db_connection():
     )
 
 @contextmanager
-def mysql_cursor(dictionary=False):
-    conn = get_db_connection()
+def mysql_cursor(commit=False, dictionary=False):
+    conn = mysql.connector.connect(
+        host=DB_HOST,
+        user=DB_USER,
+        password=DB_PASS,
+        database=DB_NAME
+    )
     cursor = conn.cursor(dictionary=dictionary)
     try:
         yield cursor
-        conn.commit()
+        if commit:
+            conn.commit()
     finally:
         cursor.close()
         conn.close()
@@ -2764,51 +2770,21 @@ def get_match_players_with_stats(current_user_email, match_id):
     return jsonify({'players': players}), 200
 
 
-@app.route('/api/matches/<int:match_id>/contest/<int:contest_id>/players', methods=['GET'])
+@app.route("/api/matches/<int:match_id>/contest/<int:contest_id>/players")
 @token_required
-def get_players_for_match_and_contest(current_user_email, match_id, contest_id):
-    """
-    Returns players for a match with optional selection stats for the given contest.
-    """
-    try:
-        with mysql_cursor(dictionary=True) as cur:
-            # Fetch players for the match
-            cur.execute("""
-                SELECT id, player_name, role, team_name, is_playing, position
-                FROM players
-                WHERE match_id = %s
-                ORDER BY is_playing DESC, position ASC
-            """, (match_id,))
-            players = cur.fetchall()
-
-            # Initialize stats
-            for p in players:
-                p['taken_count'] = 0
-                p['taken_percent'] = 0
-
-            # Compute selection stats
-            cur.execute("SELECT COUNT(*) AS total FROM entries WHERE contest_id = %s", (contest_id,))
-            total = cur.fetchone()['total'] or 0
-
-            if total > 0:
-                for p in players:
-                    cur.execute("""
-                        SELECT COUNT(*) AS cnt
-                        FROM entries e
-                        JOIN teams t ON e.team_id = t.id
-                        WHERE e.contest_id = %s
-                          AND JSON_CONTAINS(t.players, JSON_OBJECT('player_name', %s), '$')
-                    """, (contest_id, p['player_name']))
-                    cnt = cur.fetchone()['cnt'] or 0
-                    p['taken_count'] = cnt
-                    p['taken_percent'] = round(cnt * 100 / total)
-
-        return jsonify({"players": players}), 200
-
-    except Exception as e:
-        app.logger.exception("Failed to load players for AI generation")
-        return jsonify({"message": "Failed to load players"}), 500
-
+def get_players(current_user_email, match_id, contest_id):
+    with mysql_cursor(dictionary=True) as cur:
+        cur.execute("""
+            SELECT id, player_name, 
+                   LOWER(CASE WHEN role = 'Wicket-Keeper' THEN 'keeper'
+                              WHEN role = 'All-Rounder' THEN 'allrounder'
+                              ELSE role END) AS role,
+                   team_name
+            FROM players
+            WHERE match_id=%s
+        """, (match_id,))
+        players = cur.fetchall()
+    return jsonify({"players": players})
 
 
 
